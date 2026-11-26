@@ -13,15 +13,49 @@ import { filterTasksBySearch } from "../services/task-search";
 import { groupOverdueTasks } from "../services/overdue-buckets";
 import { computeTaskStats } from "../services/task-stats";
 import { openTaskAtLine } from "../navigation/open-task";
-import { insertSubtask, setTaskCompleted } from "../services/task-actions";
+import {
+	indentTask,
+	insertRootTask,
+	insertSiblingTask,
+	insertSubtask,
+	outdentTask,
+	setTaskCompleted,
+	setTaskDue,
+} from "../services/task-actions";
 import { renderCalendar } from "../ui/calendar";
 import { createImageUrlResolver, renderTaskRow, type TaskRowLabels } from "../ui/task-row";
 import { documentGroupTitle, renderTaskGroup } from "../ui/task-group";
-import { renderTaskForest } from "../ui/task-forest";
+import {
+	beginChildDraft,
+	beginRootDraft,
+	beginSiblingDraft,
+	openChildDraftInPlace,
+	removeDraftRowsInPlace,
+	renderTaskForest,
+	type TaskForestDraftHandlers,
+} from "../ui/task-forest";
 import { renderStatsView } from "../ui/stats-view";
 import { renderTaskListView } from "../ui/task-list-view";
 import { renderMyDayEmpty } from "../ui/myday-empty";
-import { TextPromptModal } from "../ui/text-prompt-modal";
+import { bindTaskListKeys } from "../ui/task-list-keys";
+import {
+	findTaskRowById,
+	patchCheckStatesForPath,
+	playTaskCheckMotion,
+	removeTaskRowLocally,
+} from "../ui/task-check-motion";
+import {
+	clearTaskDraft,
+	getSelectedTaskId,
+	getTaskDraft,
+	setSelectedTaskId,
+	type TaskDraft,
+} from "../ui/task-session";
+import {
+	closeActiveDateTimePanel,
+	isDateTimePanelOpen,
+	setDateTimePanelCloseListener,
+} from "../ui/date-time-picker";
 import { createTodoSearchPanel, type TodoSearchPanel } from "../ui/search-panel";
 import { clearChildren, el } from "../ui/dom";
 
@@ -57,6 +91,13 @@ export class TodoSidebarView extends ItemView {
 	private dayListHost: HTMLElement | null = null;
 	private dayTitleEl: HTMLElement | null = null;
 	private tabButtons = new Map<SidebarTab, HTMLButtonElement>();
+	private unbindListKeys: (() => void) | null = null;
+	/** Suppress index-driven refresh while a UI check-motion chain is running. */
+	private motionLock = 0;
+	/** Suppress vault→index→refresh after a local checkbox write (prevents scroll jump). */
+	private quietWrites = 0;
+	/** Date/time panel edited a row; refresh once the panel closes. */
+	private duePanelDirty = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TodoPlugin) {
 		super(leaf);
@@ -98,6 +139,12 @@ export class TodoSidebarView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.unsubIndex?.();
 		this.unsubIndex = this.plugin.taskIndex.onChange(() => this.refresh());
+		setDateTimePanelCloseListener(() => {
+			if (!this.duePanelDirty) return;
+			this.duePanelDirty = false;
+			/* Regroup overdue/today buckets without jumping the viewport. */
+			this.refreshPreservingScroll();
+		});
 		this.renderShell();
 		this.refresh();
 
@@ -109,8 +156,13 @@ export class TodoSidebarView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		closeActiveDateTimePanel();
+		setDateTimePanelCloseListener(null);
+		this.duePanelDirty = false;
 		this.unsubIndex?.();
 		this.unsubIndex = null;
+		this.unbindListKeys?.();
+		this.unbindListKeys = null;
 		this.searchPanel?.destroy();
 		this.searchPanel = null;
 	}
@@ -125,6 +177,16 @@ export class TodoSidebarView extends ItemView {
 		return tab;
 	}
 
+	private duePickerLabels() {
+		return {
+			setDue: this.t("draftSetDue"),
+			clearDueAria: this.t("draftClearDueAria"),
+			closePanel: this.t("draftClosePanel"),
+			prevMonth: this.t("prevMonth"),
+			nextMonth: this.t("nextMonth"),
+		};
+	}
+
 	private rowLabels(): TaskRowLabels {
 		return {
 			complete: this.t("complete"),
@@ -133,13 +195,169 @@ export class TodoSidebarView extends ItemView {
 			addToMyDay: this.t("addToMyDay"),
 			removeFromMyDay: this.t("removeFromMyDay"),
 			addSubtask: this.t("addSubtask"),
+			addSubtaskDisabledCollapsed: this.t("addSubtaskDisabledCollapsed"),
+			addSubtaskMaxDepth: this.t("addSubtaskMaxDepth"),
 			collapseChildren: this.t("collapseChildren"),
 			expandChildren: this.t("expandChildren"),
 			recurring: this.t("recurring"),
 			createdToday: this.t("createdToday"),
 			hasAttachment: this.t("hasAttachment"),
 			bugIssue: this.t("bugIssue"),
+			duePicker: this.duePickerLabels(),
 		};
+	}
+
+	private draftRowLabels() {
+		return {
+			placeholder: this.t("addSubtaskPlaceholder"),
+			confirmCreate: this.t("draftConfirmCreate"),
+			...this.duePickerLabels(),
+		};
+	}
+
+	private draftHandlers(): TaskForestDraftHandlers {
+		return {
+			labels: this.draftRowLabels(),
+			onSubmit: (draft, title, due, dueTime) => {
+				void this.commitDraft(draft, title, due, dueTime);
+			},
+			onCancel: () => {
+				clearTaskDraft();
+				if (this.rootEl) {
+					removeDraftRowsInPlace(this.rootEl);
+					return;
+				}
+				this.refreshPreservingScroll();
+			},
+		};
+	}
+
+	private async commitDraft(
+		draft: TaskDraft,
+		title: string,
+		due: string | null,
+		dueTime: string | null,
+	): Promise<void> {
+		const fileTasks = this.plugin.taskIndex.getByPath(draft.path);
+		let created: { line: number; path: string } | null = null;
+
+		if (draft.kind === "child") {
+			const parent = this.plugin.taskIndex.getById(draft.parentId);
+			if (!parent) return;
+			created = await insertSubtask(
+				this.app,
+				parent,
+				title,
+				fileTasks,
+				due,
+				dueTime,
+			);
+		} else if (draft.kind === "sibling") {
+			const anchor = this.plugin.taskIndex.getById(draft.afterId);
+			if (!anchor) return;
+			created = await insertSiblingTask(
+				this.app,
+				anchor,
+				title,
+				fileTasks,
+				due,
+				dueTime,
+			);
+		} else {
+			created = await insertRootTask(
+				this.app,
+				draft.path,
+				title,
+				fileTasks,
+				due,
+				dueTime,
+			);
+		}
+
+		/* Exit edit mode immediately — then sync disk → index → list. */
+		clearTaskDraft();
+		if (this.rootEl) removeDraftRowsInPlace(this.rootEl);
+
+		if (!created) {
+			this.refreshPreservingScroll();
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(created.path);
+		if (file instanceof TFile) {
+			await this.plugin.taskIndex.refreshFile(file, { emit: false });
+		}
+		this.refreshPreservingScroll();
+		/* Suppress the late vault→index emit from the write above. */
+		this.quietWrites += 1;
+		window.setTimeout(() => {
+			this.quietWrites = Math.max(0, this.quietWrites - 1);
+		}, 160);
+	}
+
+	/** Open child draft without rebuilding the whole list. */
+	private openChildDraft(task: ParsedTask): void {
+		const host = this.rootEl;
+		const showGuides = this.plugin.data.settings.showNestGuideLines !== false;
+		if (host && openChildDraftInPlace(host, task, this.draftHandlers(), showGuides)) {
+			return;
+		}
+		if (!beginChildDraft(task)) return;
+		this.refreshPreservingScroll();
+	}
+
+	private bindKeysToHost(host: HTMLElement | null): void {
+		this.unbindListKeys?.();
+		this.unbindListKeys = null;
+		if (!host) return;
+		this.unbindListKeys = bindTaskListKeys(host, {
+			getTaskById: (id) => this.plugin.taskIndex.getById(id),
+			onIndent: (task) => {
+				void (async () => {
+					const ok = await indentTask(
+						this.app,
+						task,
+						this.plugin.taskIndex.getByPath(task.path),
+					);
+					if (!ok) return;
+					const file = this.app.vault.getAbstractFileByPath(task.path);
+					if (file instanceof TFile) await this.plugin.taskIndex.refreshFile(file);
+					this.refresh();
+				})();
+			},
+			onOutdent: (task) => {
+				void (async () => {
+					const ok = await outdentTask(
+						this.app,
+						task,
+						this.plugin.taskIndex.getByPath(task.path),
+					);
+					if (!ok) return;
+					const file = this.app.vault.getAbstractFileByPath(task.path);
+					if (file instanceof TFile) await this.plugin.taskIndex.refreshFile(file);
+					this.refresh();
+				})();
+			},
+			onAddSibling: (task) => {
+				beginSiblingDraft(task);
+				this.refreshPreservingScroll();
+			},
+			onAddChild: (task) => {
+				this.openChildDraft(task);
+			},
+			onCancelDraft: () => {
+				if (!getTaskDraft()) return;
+				clearTaskDraft();
+				if (this.rootEl) {
+					removeDraftRowsInPlace(this.rootEl);
+					return;
+				}
+				this.refreshPreservingScroll();
+			},
+			onToggleComplete: (task) => {
+				const next = !task.completed;
+				this.toggleTaskComplete(task, next);
+			},
+		});
 	}
 
 	private renderShell(): void {
@@ -152,6 +370,7 @@ export class TodoSidebarView extends ItemView {
 
 		const root = el("div", { cls: "todo-sidebar", parent: container });
 		this.rootEl = root;
+		this.syncMotionAttr();
 
 		const toolbar = el("div", {
 			cls: ["todo-toolbar", "nav-header"],
@@ -362,6 +581,7 @@ export class TodoSidebarView extends ItemView {
 		const btn = this.tabButtons.get(tab);
 		if (!btn) return;
 		btn.hidden = !visible;
+		btn.classList.toggle("is-tab-hidden", !visible);
 		btn.toggleAttribute("aria-hidden", !visible);
 		if (visible) btn.removeAttribute("tabindex");
 		else btn.tabIndex = -1;
@@ -463,7 +683,10 @@ export class TodoSidebarView extends ItemView {
 					this.plugin.data.settings.showListTab = next;
 					void this.plugin.savePluginData();
 					if (!next && this.tab === "list") this.setTab("suggest");
-					else this.refresh();
+					else {
+						this.syncTabButtons();
+						this.refresh();
+					}
 				});
 		});
 		menu.addItem((menuItem) => {
@@ -475,7 +698,10 @@ export class TodoSidebarView extends ItemView {
 					this.plugin.data.settings.showStatsTab = next;
 					void this.plugin.savePluginData();
 					if (!next && this.tab === "stats") this.setTab("suggest");
-					else this.refresh();
+					else {
+						this.syncTabButtons();
+						this.refresh();
+					}
 				});
 		});
 		menu.showAtMouseEvent(event);
@@ -484,6 +710,7 @@ export class TodoSidebarView extends ItemView {
 	}
 
 	refresh(): void {
+		if (this.motionLock > 0 || this.quietWrites > 0) return;
 		this.plugin.myDay.ensureToday();
 		this.plugin.myDay.pruneMissing(new Set(this.plugin.taskIndex.getAll().map((t) => t.id)));
 		const safe = this.sanitizeTab(this.tab);
@@ -492,6 +719,7 @@ export class TodoSidebarView extends ItemView {
 			return;
 		}
 		this.syncTabButtons();
+		this.syncMotionAttr();
 		if (this.tab === "myday") this.refreshMyDay();
 		else if (this.tab === "suggest") this.refreshSuggest();
 		else if (this.tab === "list") this.refreshList();
@@ -499,22 +727,104 @@ export class TodoSidebarView extends ItemView {
 		else this.refreshDayView();
 	}
 
+	/** Full rebuild that restores the scrollable pane position (due edits, etc.). */
+	private refreshPreservingScroll(): void {
+		const scroller = this.getScrollHost();
+		const top = scroller?.scrollTop ?? 0;
+		this.refresh();
+		if (!scroller) return;
+		requestAnimationFrame(() => {
+			scroller.scrollTop = top;
+			requestAnimationFrame(() => {
+				scroller.scrollTop = top;
+			});
+		});
+	}
+
+	private getScrollHost(): HTMLElement | null {
+		const content = this.containerEl.children[1];
+		if (content instanceof HTMLElement) return content;
+		return this.rootEl;
+	}
+
+	private syncMotionAttr(): void {
+		const on = this.plugin.data.settings.enableTaskMotion !== false;
+		this.rootEl?.setAttribute("data-motion", on ? "on" : "off");
+	}
+
+	/**
+	 * UI / keyboard toggle — motion + vault write + local DOM patch only.
+	 * Never full-refreshes the list (that resets scroll to top).
+	 */
+	private toggleTaskComplete(task: ParsedTask, completed: boolean): void {
+		if (this.motionLock > 0) return;
+		void (async () => {
+			const settings = this.plugin.data.settings;
+			const host = this.rootEl;
+			const row = host ? findTaskRowById(host, task.id) : null;
+			this.motionLock += 1;
+			this.quietWrites += 1;
+			try {
+				if (row) {
+					await playTaskCheckMotion(row, task.id, completed, {
+						enabled: settings.enableTaskMotion !== false,
+						autoCollapseOnComplete: settings.autoCollapseOnParentComplete === true,
+					});
+				}
+				const ok = await setTaskCompleted(this.app, task, completed, {
+					linkParentChild: settings.parentChildCheckLink,
+					fileTasks: this.plugin.taskIndex.getByPath(task.path),
+				});
+				if (!ok) return;
+				if (completed) this.plugin.myDay.remove(task.id);
+				await this.plugin.savePluginData();
+
+				const file = this.app.vault.getAbstractFileByPath(task.path);
+				if (file instanceof TFile) {
+					await this.plugin.taskIndex.refreshFile(file, { emit: false });
+				}
+
+				if (host) {
+					const byId = this.plugin.taskIndex.getByIdMap();
+					patchCheckStatesForPath(
+						host,
+						task.path,
+						byId,
+						settings.parentChildCheckLink,
+					);
+					const shouldHideCompleted =
+						completed &&
+						(this.tab === "myday" ||
+							this.tab === "suggest" ||
+							(this.tab === "list" && settings.listHideCompleted));
+					if (shouldHideCompleted) {
+						const toRemove: HTMLElement[] = [];
+						host.querySelectorAll(".todo-task[data-id]").forEach((el) => {
+							if (!(el instanceof HTMLElement)) return;
+							const id = el.getAttribute("data-id");
+							const t = id ? byId.get(id) : undefined;
+							if (t && t.path === task.path && t.completed) toRemove.push(el);
+						});
+						for (const el of toRemove) removeTaskRowLocally(el);
+					}
+				}
+			} finally {
+				this.motionLock = Math.max(0, this.motionLock - 1);
+				/* Cover vault modify → index emit that arrives after our silent sync. */
+				window.setTimeout(() => {
+					this.quietWrites = Math.max(0, this.quietWrites - 1);
+				}, 160);
+			}
+		})();
+	}
+
 	private rowHandlers() {
-		const settings = this.plugin.data.settings;
 		return {
 			onOpen: (task: ParsedTask) => {
 				void openTaskAtLine(this.app, task);
 			},
 			onToggleComplete: (task: ParsedTask, completed: boolean) => {
-				void (async () => {
-					const ok = await setTaskCompleted(this.app, task, completed, {
-						linkParentChild: settings.parentChildCheckLink,
-						fileTasks: this.plugin.taskIndex.getByPath(task.path),
-					});
-					if (ok && completed) this.plugin.myDay.remove(task.id);
-					await this.plugin.savePluginData();
-					window.setTimeout(() => this.refresh(), 220);
-				})();
+				this.toggleTaskComplete(task, completed);
 			},
 			onAddToMyDay: (task: ParsedTask) => {
 				if (this.plugin.myDay.add(task.id)) {
@@ -528,31 +838,56 @@ export class TodoSidebarView extends ItemView {
 				this.refresh();
 			},
 			onAddSubtask: (task: ParsedTask) => {
-				new TextPromptModal(this.app, {
-					heading: this.t("addSubtask"),
-					placeholder: this.t("addSubtaskPlaceholder"),
-					confirmLabel: this.t("addSubtaskConfirm"),
-					onSubmit: (title) => {
-						void (async () => {
-							const created = await insertSubtask(
-								this.app,
-								task,
-								title,
-								this.plugin.taskIndex.getByPath(task.path),
-							);
-							if (!created) return;
-							const file = this.app.vault.getAbstractFileByPath(created.path);
-							if (file instanceof TFile) await this.plugin.taskIndex.refreshFile(file);
-							const fresh = this.plugin.taskIndex
-								.getByPath(created.path)
-								.find((t) => t.line === created.line);
-							if (fresh) void openTaskAtLine(this.app, fresh);
-							this.refresh();
-						})();
-					},
-				}).open();
+				this.openChildDraft(task);
+			},
+			onSetDue: (task: ParsedTask, due: string | null, dueTime: string | null) => {
+				void (async () => {
+					this.quietWrites += 1;
+					try {
+						const ok = await setTaskDue(this.app, task, due, dueTime);
+						if (!ok) return;
+						const file = this.app.vault.getAbstractFileByPath(task.path);
+						if (file instanceof TFile) {
+							/* Same pattern as check: silent index sync, no list rebuild. */
+							await this.plugin.taskIndex.refreshFile(file, { emit: false });
+						}
+						/* Due changes rewrite task id fingerprint — keep the row keyed. */
+						const host = this.rootEl;
+						const updated = this.plugin.taskIndex
+							.getByPath(task.path)
+							.find((t) => t.line === task.line);
+						if (host && updated) {
+							const row = findTaskRowById(host, task.id);
+							row?.setAttribute("data-id", updated.id);
+							if (getSelectedTaskId() === task.id) {
+								setSelectedTaskId(updated.id);
+							}
+						}
+					} finally {
+						window.setTimeout(() => {
+							this.quietWrites = Math.max(0, this.quietWrites - 1);
+						}, 160);
+					}
+					if (isDateTimePanelOpen()) {
+						this.duePanelDirty = true;
+						return;
+					}
+					this.refreshPreservingScroll();
+				})();
+			},
+			onSelect: (task: ParsedTask) => {
+				setSelectedTaskId(task.id);
+				const host = this.listHost ?? this.dayListHost ?? this.rootEl;
+				if (!host) return;
+				host.querySelectorAll(".todo-task[data-id]").forEach((row) => {
+					row.classList.toggle(
+						"is-selected",
+						row.getAttribute("data-id") === task.id,
+					);
+				});
 			},
 			onNestCollapse: () => {
+				/* Used by draft/group entry points to re-render; twist collapse is local. */
 				this.refresh();
 			},
 			resolveImageUrl: createImageUrlResolver(this.app),
@@ -662,14 +997,17 @@ export class TodoSidebarView extends ItemView {
 			indexById: this.plugin.taskIndex.getByIdMap(),
 			linkParentChild: settings.parentChildCheckLink,
 			showNestGuideLines: settings.showNestGuideLines,
+			draftHandlers: this.draftHandlers(),
 			labels: {
 				title: this.t("listTitle"),
 				empty: this.searchQuery.trim() ? this.t("noMatch") : this.t("listEmpty"),
 				untagged: this.t("listUntagged"),
 				count: (n) => this.t("listCount", { count: n }),
+				addRootTask: this.t("addRootTask"),
 				row: this.rowLabels(),
 			},
 		});
+		this.bindKeysToHost(this.listHost.querySelector(".todo-scroll"));
 	}
 
 	private refreshStats(): void {
@@ -753,10 +1091,12 @@ export class TodoSidebarView extends ItemView {
 		}
 
 		const settings = this.plugin.data.settings;
+		const draftHandlers = this.draftHandlers();
 		const nestOpts = {
 			indexById: this.plugin.taskIndex.getByIdMap(),
 			linkParentChild: settings.parentChildCheckLink,
 			showNestGuideLines: settings.showNestGuideLines,
+			draftHandlers,
 		};
 
 		if (!settings.groupByDocument) {
@@ -768,6 +1108,7 @@ export class TodoSidebarView extends ItemView {
 				labels,
 				...nestOpts,
 			});
+			this.bindKeysToHost(this.dayListHost);
 			return;
 		}
 
@@ -782,8 +1123,15 @@ export class TodoSidebarView extends ItemView {
 				handlers,
 				rowLabels: labels,
 				rowMode: "day",
+				rootTaskPath: path,
+				addRootLabel: this.t("addRootTask"),
+				onRequestRootDraft: (rootPath, groupKey) => {
+					beginRootDraft(rootPath, groupKey);
+					this.refresh();
+				},
 				...nestOpts,
 			});
 		}
+		this.bindKeysToHost(this.dayListHost);
 	}
 }

@@ -3,7 +3,11 @@ import type { ParsedTask } from "../types";
 import { noteDisplayName } from "../utils/note-path";
 import { el } from "./dom";
 import { renderTagChip } from "./tag-chip";
-import { renderTaskForest } from "./task-forest";
+import {
+	beginRootDraft,
+	renderTaskForest,
+	type TaskForestDraftHandlers,
+} from "./task-forest";
 import {
 	type TaskRowHandlers,
 	type TaskRowLabels,
@@ -47,6 +51,11 @@ export interface TaskGroupOptions {
 	indexById?: Map<string, ParsedTask>;
 	linkParentChild?: boolean;
 	showNestGuideLines?: boolean;
+	draftHandlers?: TaskForestDraftHandlers;
+	/** Target note path for “add root task” in this group. */
+	rootTaskPath?: string;
+	addRootLabel?: string;
+	onRequestRootDraft?: (path: string, groupKey: string) => void;
 }
 
 function safeSetIcon(node: HTMLElement, name: string): void {
@@ -68,7 +77,7 @@ export function documentGroupTitle(path: string): string {
  */
 export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions): void {
 	const { tasks, handlers, rowLabels, rowOptions } = options;
-	if (!tasks.length) return;
+	if (!tasks.length && !options.draftHandlers) return;
 
 	const variant = options.variant ?? (options.chips?.length ? "tag" : "document");
 	const chips = options.chips?.filter((c) => c.label.trim().length > 0) ?? [];
@@ -79,6 +88,8 @@ export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions):
 		options.tooltip ??
 		(chips.length ? chips.map((c) => c.tooltip).join(",") : title);
 	const collapsed = collapsedGroupKeys.has(collapseKey);
+	const rootPath = options.rootTaskPath ?? tasks[0]?.path ?? null;
+	const canAddRoot = !!rootPath && (!!options.onRequestRootDraft || !!options.draftHandlers);
 
 	const group = el("div", {
 		cls: [
@@ -95,12 +106,16 @@ export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions):
 			? chips.map((c) => c.tooltip).join(" · ") || title
 			: (options.tooltip ?? title);
 
-	const head = el("button", {
+	const head = el("div", {
 		cls: "todo-group__head",
 		parent: group,
+	});
+
+	const toggle = el("button", {
+		cls: "todo-group__toggle",
+		parent: head,
 		attr: {
 			type: "button",
-			/* Document groups: path on the whole head. Tag groups: tooltip lives on each chip. */
 			title: variant === "document" ? (options.tooltip ?? title) : undefined,
 			"aria-expanded": String(!collapsed),
 			"aria-label": ariaLabel || title,
@@ -109,13 +124,13 @@ export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions):
 
 	const chevron = el("span", {
 		cls: "todo-group__chevron",
-		parent: head,
+		parent: toggle,
 		attr: { "aria-hidden": "true" },
 	});
 	safeSetIcon(chevron, "chevron-down");
 
 	if (chips.length > 0) {
-		const chipRow = el("span", { cls: "todo-group__chips", parent: head });
+		const chipRow = el("span", { cls: "todo-group__chips", parent: toggle });
 		for (const chip of chips) {
 			renderTagChip(chipRow, {
 				label: chip.label,
@@ -124,10 +139,38 @@ export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions):
 			});
 		}
 	} else {
-		el("span", { cls: "todo-group__title", text: title, parent: head });
+		el("span", { cls: "todo-group__title", text: title, parent: toggle });
 	}
 
-	el("span", { cls: "todo-group__count", text: options.countLabel, parent: head });
+	el("span", { cls: "todo-group__count", text: options.countLabel, parent: toggle });
+
+	if (canAddRoot && rootPath) {
+		const add = el("button", {
+			cls: ["todo-group__add", "clickable-icon"],
+			parent: head,
+			attr: {
+				type: "button",
+				title: options.addRootLabel ?? "新增任务",
+				"aria-label": options.addRootLabel ?? "新增任务",
+			},
+		});
+		safeSetIcon(add, "plus");
+		add.addEventListener("click", (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (group.classList.contains("is-collapsed")) {
+				group.classList.remove("is-collapsed");
+				toggle.setAttribute("aria-expanded", "true");
+				collapsedGroupKeys.delete(collapseKey);
+			}
+			if (options.onRequestRootDraft) {
+				options.onRequestRootDraft(rootPath, collapseKey);
+			} else {
+				beginRootDraft(rootPath, collapseKey);
+				options.handlers.onNestCollapse?.(tasks[0]!, false);
+			}
+		});
+	}
 
 	const body = el("div", { cls: "todo-group__body", parent: group });
 	renderTaskForest({
@@ -140,13 +183,15 @@ export function renderTaskGroup(parent: HTMLElement, options: TaskGroupOptions):
 		rowOptions: { ...rowOptions, hideSource: true },
 		linkParentChild: options.linkParentChild !== false,
 		showNestGuideLines: options.showNestGuideLines === true,
+		draftHandlers: options.draftHandlers,
+		groupKey: collapseKey,
 	});
 
-	head.addEventListener("click", (event) => {
+	toggle.addEventListener("click", (event) => {
 		event.preventDefault();
 		const next = !group.classList.contains("is-collapsed");
 		group.classList.toggle("is-collapsed", next);
-		head.setAttribute("aria-expanded", String(!next));
+		toggle.setAttribute("aria-expanded", String(!next));
 		if (next) collapsedGroupKeys.add(collapseKey);
 		else collapsedGroupKeys.delete(collapseKey);
 	});

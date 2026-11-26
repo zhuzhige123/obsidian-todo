@@ -42,6 +42,17 @@ function toDateKey(token: string | undefined): string | null {
 	return m?.[1] ?? null;
 }
 
+/** First HH:mm after the calendar date in a Tasks date token. */
+function toTimeKey(token: string | undefined): string | null {
+	if (!token) return null;
+	const m = token.match(/\d{4}-\d{2}-\d{2}(?:[T ]+|[\s-]+)(\d{1,2}):(\d{2})/);
+	if (!m?.[1] || !m[2]) return null;
+	const h = Number.parseInt(m[1], 10);
+	const min = Number.parseInt(m[2], 10);
+	if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+	return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
 function fingerprint(
 	path: string,
 	line: number,
@@ -108,7 +119,9 @@ export function parseTaskLine(path: string, line: number, raw: string): ParsedTa
 	const indent = measureIndent(matched[1] ?? "");
 	const completed = matched[2].toLowerCase() === "x";
 	const body = matched[3] ?? "";
-	const due = toDateKey(body.match(DUE_RE)?.[1]);
+	const dueToken = body.match(DUE_RE)?.[1];
+	const due = toDateKey(dueToken);
+	const dueTime = toTimeKey(dueToken);
 	const scheduled = toDateKey(body.match(SCHEDULED_RE)?.[1]);
 	const created = toDateKey(body.match(CREATED_RE)?.[1]);
 	const doneDate = toDateKey(body.match(DONE_RE)?.[1]);
@@ -128,6 +141,7 @@ export function parseTaskLine(path: string, line: number, raw: string): ParsedTa
 		completed,
 		title,
 		due,
+		dueTime,
 		scheduled,
 		created,
 		doneDate,
@@ -185,4 +199,46 @@ export function childIndentPrefix(parentRaw: string): string {
 	const matched = parentRaw.match(/^(\s*)/);
 	const base = matched?.[1] ?? "";
 	return `${base}  `;
+}
+
+/** Leading whitespace of a raw markdown line. */
+export function lineIndentPrefix(raw: string): string {
+	return raw.match(/^(\s*)/)?.[1] ?? "";
+}
+
+/**
+ * Shift leading indent by `deltaSpaces` (can be negative).
+ * Tabs are expanded as 2 spaces before rewriting as spaces.
+ */
+export function shiftLineIndent(raw: string, deltaSpaces: number): string {
+	const matched = raw.match(/^(\s*)(.*)$/);
+	if (!matched) return raw;
+	const nextWidth = Math.max(0, measureIndent(matched[1] ?? "") + deltaSpaces);
+	return `${" ".repeat(nextWidth)}${matched[2] ?? ""}`;
+}
+
+/** Build a new incomplete task line with optional due date / time. */
+export function buildTaskMarkdownLine(
+	indentPrefix: string,
+	title: string,
+	due: string | null = null,
+	dueTime: string | null = null,
+): string {
+	let body = title.trim();
+	if (due) {
+		body += dueTime ? ` 📅 ${due} ${dueTime}` : ` 📅 ${due}`;
+	}
+	return `${indentPrefix}- [ ] ${body}`;
+}
+
+/** Replace or remove the 📅 due field on a raw task line. */
+export function applyDueToTaskLine(
+	raw: string,
+	due: string | null,
+	dueTime: string | null = null,
+): string {
+	const without = raw.replace(new RegExp(String.raw`\s*📅\s*${DATE_TOKEN}`), "");
+	if (!due) return without.trimEnd();
+	const token = dueTime ? `${due} ${dueTime}` : due;
+	return `${without.trimEnd()} 📅 ${token}`;
 }

@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseTaskLine, parseTasksInMarkdown, toggleTaskLineCompleted } from "./task-parser";
+import {
+	applyDueToTaskLine,
+	buildTaskMarkdownLine,
+	parseTaskLine,
+	parseTasksInMarkdown,
+	shiftLineIndent,
+	toggleTaskLineCompleted,
+} from "./task-parser";
 
 describe("task-parser", () => {
 	it("parses Tasks emoji due/priority/recurring", () => {
@@ -27,6 +34,19 @@ describe("task-parser", () => {
 		assert.ok(task);
 		assert.equal(task.title, "🎯 测试");
 		assert.equal(task.due, "2026-11-21");
+		assert.equal(task.dueTime, "05:45");
+	});
+
+	it("builds due lines with optional time and rewrites due tokens", () => {
+		assert.equal(
+			buildTaskMarkdownLine("", "Ship", "2026-11-26", "09:30"),
+			"- [ ] Ship 📅 2026-11-26 09:30",
+		);
+		assert.equal(
+			applyDueToTaskLine("- [ ] Ship 📅 2026-11-01", "2026-12-21", "09:30"),
+			"- [ ] Ship 📅 2026-12-21 09:30",
+		);
+		assert.equal(applyDueToTaskLine("- [ ] Ship 📅 2026-11-01 08:00", null), "- [ ] Ship");
 	});
 
 	it("parses multiple tasks in a file", () => {
@@ -55,6 +75,17 @@ describe("task-parser", () => {
 		assert.ok(task);
 		assert.equal(task.title, "截图摘录在正文中的高亮范围异常");
 		assert.deepEqual(task.images, ["QQ_1791428157252.png"]);
+	});
+
+	it("shifts indent and builds task markdown lines", () => {
+		assert.equal(shiftLineIndent("- [ ] A", 2), "  - [ ] A");
+		assert.equal(shiftLineIndent("  - [ ] A", -2), "- [ ] A");
+		assert.equal(shiftLineIndent("  - [ ] A", -4), "- [ ] A");
+		assert.equal(
+			buildTaskMarkdownLine("  ", "Child", "2026-11-26"),
+			"  - [ ] Child 📅 2026-11-26",
+		);
+		assert.equal(buildTaskMarkdownLine("", "Root"), "- [ ] Root");
 	});
 
 	it("builds parent/child tree from markdown indent", () => {

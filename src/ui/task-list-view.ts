@@ -7,7 +7,11 @@ import {
 import { clearChildren, el } from "./dom";
 import { tagChipLabel } from "../utils/note-path";
 import { documentGroupTitle, renderTaskGroup } from "./task-group";
-import { renderTaskForest } from "./task-forest";
+import {
+	beginRootDraft,
+	renderTaskForest,
+	type TaskForestDraftHandlers,
+} from "./task-forest";
 import { type TaskRowHandlers, type TaskRowLabels } from "./task-row";
 
 export interface TaskListViewLabels {
@@ -15,6 +19,7 @@ export interface TaskListViewLabels {
 	empty: string;
 	untagged: string;
 	count: (n: number) => string;
+	addRootTask: string;
 	row: TaskRowLabels;
 }
 
@@ -27,6 +32,7 @@ export interface TaskListViewOptions {
 	indexById?: Map<string, ParsedTask>;
 	linkParentChild?: boolean;
 	showNestGuideLines?: boolean;
+	draftHandlers?: TaskForestDraftHandlers;
 }
 
 export function renderTaskListView(host: HTMLElement, options: TaskListViewOptions): void {
@@ -43,7 +49,11 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 		parent: head,
 	});
 
-	const scroll = el("div", { cls: "todo-scroll", parent: host });
+	const scroll = el("div", {
+		cls: "todo-scroll",
+		parent: host,
+		attr: { tabindex: "-1" },
+	});
 	if (!tasks.length) {
 		el("div", { cls: "todo-empty", text: labels.empty, parent: scroll });
 		return;
@@ -53,6 +63,15 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 		indexById: options.indexById,
 		linkParentChild: options.linkParentChild !== false,
 		showNestGuideLines: options.showNestGuideLines === true,
+		draftHandlers: options.draftHandlers,
+	};
+
+	const requestRootDraft = (path: string, groupKey: string): void => {
+		beginRootDraft(path, groupKey);
+		handlers.onNestCollapse?.(
+			tasks.find((t) => t.path === path) ?? tasks[0]!,
+			false,
+		);
 	};
 
 	if (options.groupMode === "flat") {
@@ -80,6 +99,9 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 				handlers,
 				rowLabels: labels.row,
 				rowMode: "list",
+				rootTaskPath: path,
+				addRootLabel: labels.addRootTask,
+				onRequestRootDraft: requestRootDraft,
 				...nestOpts,
 			});
 		}
@@ -97,6 +119,7 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 		const list = byTag.get(key) ?? [];
 		const isUntagged = key === untaggedKey;
 		const rawTag = isUntagged ? labels.untagged : key;
+		const rootPath = list[0]?.path;
 		renderTaskGroup(scroll, {
 			variant: "tag",
 			chips: [
@@ -112,6 +135,9 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 			handlers,
 			rowLabels: labels.row,
 			rowMode: "list",
+			rootTaskPath: rootPath,
+			addRootLabel: labels.addRootTask,
+			onRequestRootDraft: requestRootDraft,
 			...nestOpts,
 		});
 	}

@@ -17,6 +17,26 @@ export function formatShortDate(key: string, todayKey: string): string {
 	return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+/** Capsule label: `12月21日` or `12月21日 09:30` (never uses “今天” in capsules). */
+export function formatDueCapsule(dateKey: string, time: string | null = null): string {
+	const date = parseLocalDateKey(dateKey);
+	const day = `${date.getMonth() + 1}月${date.getDate()}日`;
+	return time ? `${day} ${time}` : day;
+}
+
+export function formatMonthTitle(date: Date): string {
+	return `${date.getMonth() + 1}月 ${date.getFullYear()}`;
+}
+
+/** Normalize loose hour/minute input to HH:mm or null. */
+export function normalizeTimeInput(hour: string, minute: string): string | null {
+	const h = Number.parseInt(hour, 10);
+	const m = Number.parseInt(minute, 10);
+	if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+	if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+	return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 export function formatDayHeading(key: string): string {
 	const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
 	const date = parseLocalDateKey(key);

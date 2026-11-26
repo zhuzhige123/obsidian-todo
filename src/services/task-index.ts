@@ -95,10 +95,16 @@ export class TaskIndex {
 		this.emit();
 	}
 
-	async refreshFile(file: TFile): Promise<void> {
+	/**
+	 * Re-parse one file into the index.
+	 * Pass `{ emit: false }` after a local UI write so the sidebar can patch
+	 * rows in place without a full re-render (avoids scroll jump).
+	 */
+	async refreshFile(file: TFile, options?: { emit?: boolean }): Promise<void> {
 		if (file.extension !== "md") return;
+		const shouldEmit = options?.emit !== false;
 		if (this.isExcluded(file.path)) {
-			this.removePath(file.path);
+			this.removePath(file.path, shouldEmit);
 			return;
 		}
 		try {
@@ -109,7 +115,7 @@ export class TaskIndex {
 				this.tasksByPath.set(file.path, tasks);
 				for (const task of tasks) this.tasksById.set(task.id, task);
 			}
-			this.emit();
+			if (shouldEmit) this.emit();
 		} catch {
 			// ignore
 		}

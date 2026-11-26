@@ -10,6 +10,7 @@ function task(partial: Partial<ParsedTask> & Pick<ParsedTask, "title" | "path">)
 		raw: `- [ ] ${partial.title}`,
 		completed: false,
 		due: null,
+		dueTime: null,
 		scheduled: null,
 		created: null,
 		doneDate: null,

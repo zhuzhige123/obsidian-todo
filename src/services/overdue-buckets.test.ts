@@ -12,6 +12,7 @@ function task(due: string, title = due): ParsedTask {
 		completed: false,
 		title,
 		due,
+		dueTime: null,
 		scheduled: null,
 		created: null,
 		doneDate: null,

@@ -37,7 +37,10 @@ export interface ParsedTask {
 	completed: boolean;
 	/** Visible title without emoji markers / image embeds */
 	title: string;
+	/** Due date YYYY-MM-DD */
 	due: string | null;
+	/** Optional due time HH:mm (Tasks-compatible trailing time on 📅) */
+	dueTime: string | null;
 	scheduled: string | null;
 	created: string | null;
 	doneDate: string | null;
@@ -69,6 +72,13 @@ export interface TodoPluginSettings {
 	parentChildCheckLink: boolean;
 	/** Draw faint dashed nest guides under indented tasks */
 	showNestGuideLines: boolean;
+	/** Checkbox / strike / collapse motion chain; off = instant state change */
+	enableTaskMotion: boolean;
+	/**
+	 * When motion is on: checking a parent auto-collapses its children rail
+	 * at t≈200ms. Default off. Manual twist remains independent.
+	 */
+	autoCollapseOnParentComplete: boolean;
 	/** Folder paths to exclude from scanning (vault-relative) */
 	excludeFolders: string[];
 }
@@ -91,7 +101,9 @@ export const DEFAULT_SETTINGS: TodoPluginSettings = {
 	listGroupMode: "document",
 	listHideCompleted: true,
 	parentChildCheckLink: true,
-	showNestGuideLines: false,
+	showNestGuideLines: true,
+	enableTaskMotion: true,
+	autoCollapseOnParentComplete: false,
 	excludeFolders: [],
 };
 
@@ -126,6 +138,14 @@ export function normalizeSettings(partial?: Partial<TodoPluginSettings>): TodoPl
 			typeof partial?.showNestGuideLines === "boolean"
 				? partial.showNestGuideLines
 				: DEFAULT_SETTINGS.showNestGuideLines,
+		enableTaskMotion:
+			typeof partial?.enableTaskMotion === "boolean"
+				? partial.enableTaskMotion
+				: DEFAULT_SETTINGS.enableTaskMotion,
+		autoCollapseOnParentComplete:
+			typeof partial?.autoCollapseOnParentComplete === "boolean"
+				? partial.autoCollapseOnParentComplete
+				: DEFAULT_SETTINGS.autoCollapseOnParentComplete,
 	};
 	return merged;
 }

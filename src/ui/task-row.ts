@@ -1,9 +1,13 @@
 import { TFile, setIcon, type App } from "obsidian";
 import { getTaskVisualKind } from "../services/task-kind";
-import { TASK_INDENT_STEP_PX } from "../constants";
+import { TASK_BRANCH_PAD_PX, TASK_ROW_PAD_LEFT_PX } from "../constants";
 import type { ParsedTask } from "../types";
 import { formatShortDate, isOverdue, toLocalDateKey } from "../utils/dates";
 import { shortNoteLabel, tagChipLabel } from "../utils/note-path";
+import {
+	renderDueControl,
+	type DateTimePickerLabels,
+} from "./date-time-picker";
 import { el } from "./dom";
 import { renderTagChip } from "./tag-chip";
 
@@ -14,6 +18,14 @@ export interface TaskRowHandlers {
 	onRemoveFromMyDay?: (task: ParsedTask) => void;
 	onAddSubtask?: (task: ParsedTask) => void;
 	onNestCollapse?: (task: ParsedTask, collapsed: boolean) => void;
+	/** Mark row as the keyboard / shortcut selection target. */
+	onSelect?: (task: ParsedTask) => void;
+	/** Update 📅 due (+ optional time) on an existing task. */
+	onSetDue?: (
+		task: ParsedTask,
+		due: string | null,
+		dueTime: string | null,
+	) => void;
 	/** Resolve vault image path for hover preview (list attachments). */
 	resolveImageUrl?: (link: string, sourcePath: string) => string | null;
 }
@@ -27,12 +39,15 @@ export interface TaskRowLabels {
 	addToMyDay: string;
 	removeFromMyDay: string;
 	addSubtask: string;
+	addSubtaskDisabledCollapsed: string;
+	addSubtaskMaxDepth: string;
 	collapseChildren: string;
 	expandChildren: string;
 	recurring: string;
 	createdToday: string;
 	hasAttachment: string;
 	bugIssue: string;
+	duePicker: DateTimePickerLabels;
 }
 
 export interface TaskRowNestOptions {
@@ -40,13 +55,19 @@ export interface TaskRowNestOptions {
 	visibleChildCount: number;
 	checkState: "unchecked" | "checked" | "indeterminate";
 	collapsed: boolean;
+	/** Draw a short horizontal branch into the parent channel (depth > 0). */
 	showGuideLines: boolean;
+	/** Row `+` present but not clickable (collapsed parent / max depth). */
+	addDisabled?: boolean;
+	addDisabledReason?: "collapsed" | "max-depth" | null;
 	onToggleCollapse: (task: ParsedTask, collapsed: boolean) => void;
 }
 
 export interface TaskRowOptions {
 	/** When true, never render source path on the row (grouped list/day). */
 	hideSource?: boolean;
+	/** Keyboard / click selection highlight. */
+	selected?: boolean;
 	nest?: TaskRowNestOptions;
 }
 
@@ -58,6 +79,14 @@ function safeSetIcon(node: HTMLElement, name: string): void {
 	}
 }
 
+const DEFAULT_DUE_PICKER: DateTimePickerLabels = {
+	setDue: "设置日期",
+	clearDueAria: "清除日期和时间",
+	closePanel: "关闭",
+	prevMonth: "上一月",
+	nextMonth: "下一月",
+};
+
 const DEFAULT_LABELS: TaskRowLabels = {
 	complete: "完成",
 	incomplete: "标为未完成",
@@ -65,12 +94,15 @@ const DEFAULT_LABELS: TaskRowLabels = {
 	addToMyDay: "添加到我的一天",
 	removeFromMyDay: "移出我的一天",
 	addSubtask: "新增子任务",
+	addSubtaskDisabledCollapsed: "请先展开父任务",
+	addSubtaskMaxDepth: "已达最大嵌套层级",
 	collapseChildren: "折叠子任务",
 	expandChildren: "展开子任务",
 	recurring: "重复",
 	createdToday: "创建于当天",
 	hasAttachment: "附图",
 	bugIssue: "待解决问题",
+	duePicker: DEFAULT_DUE_PICKER,
 };
 
 let activeImagePreview: HTMLElement | null = null;
@@ -140,6 +172,7 @@ export function renderTaskRow(
 	const checkState =
 		nest?.checkState ?? (task.completed ? "checked" : "unchecked");
 	const hasChildren = (nest?.visibleChildCount ?? 0) > 0;
+	const selected = options.selected === true;
 
 	const row = el("div", {
 		cls: [
@@ -148,16 +181,20 @@ export function renderTaskRow(
 			kind !== "normal" ? `todo-task--${kind}` : "",
 			checkState === "checked" ? "is-done" : "",
 			hasChildren ? "has-children" : "",
-			nest?.showGuideLines && depth > 0 ? "has-nest-guide" : "",
+			selected ? "is-selected" : "",
+			nest?.showGuideLines && depth > 0 ? "has-nest-branch" : "",
 		],
 		parent,
 		attr: {
 			"data-id": task.id,
 			"data-depth": String(depth),
+			tabindex: "0",
 		},
 	});
-	row.style.setProperty("--todo-nest-depth", String(depth));
-	row.style.paddingLeft = `${4 + depth * TASK_INDENT_STEP_PX}px`;
+	const branched = !!nest?.showGuideLines && depth > 0;
+	const rowPad = branched ? TASK_BRANCH_PAD_PX : TASK_ROW_PAD_LEFT_PX;
+	row.style.paddingLeft = `${rowPad}px`;
+	row.style.setProperty("--todo-row-pad", `${rowPad}px`);
 
 	const check = el("button", {
 		cls: [
@@ -181,8 +218,9 @@ export function renderTaskRow(
 	check.addEventListener("click", (event) => {
 		event.preventDefault();
 		event.stopPropagation();
-		const next = checkState !== "checked";
-		handlers.onToggleComplete(task, next);
+		/* Read live DOM — local check patches update classes without re-binding. */
+		const currentlyOn = check.classList.contains("is-on");
+		handlers.onToggleComplete(task, !currentlyOn);
 	});
 
 	if (hasChildren && nest) {
@@ -238,16 +276,21 @@ export function renderTaskRow(
 	const chips = el("span", { cls: "todo-task__chips", parent: row });
 
 	const dueKey = task.due;
-	if (dueKey) {
-		const overdue = isOverdue(dueKey, today, checkState === "checked");
-		const due = el("span", {
-			cls: ["todo-chip", "todo-due", overdue ? "is-overdue" : "is-soon"],
-			parent: chips,
-		});
-		const dueIcon = el("span", { cls: "todo-due__icon", parent: due });
-		safeSetIcon(dueIcon, "calendar");
-		el("span", { text: formatShortDate(dueKey, today), parent: due });
-	} else if (task.scheduled) {
+	const overdue = isOverdue(dueKey, today, checkState === "checked");
+	renderDueControl({
+		parent: chips,
+		value: { due: dueKey, dueTime: task.dueTime },
+		labels: labels.duePicker,
+		cls: [
+			"todo-due-ctl--row",
+			dueKey ? (overdue ? "is-overdue" : "is-soon") : "",
+		],
+		onChange: (next) => {
+			handlers.onSetDue?.(task, next.due, next.dueTime);
+		},
+	});
+
+	if (!dueKey && task.scheduled) {
 		const scheduled = el("span", {
 			cls: ["todo-chip", "todo-due", "is-soon"],
 			parent: chips,
@@ -255,7 +298,7 @@ export function renderTaskRow(
 		const ico = el("span", { cls: "todo-due__icon", parent: scheduled });
 		safeSetIcon(ico, "clock");
 		el("span", { text: formatShortDate(task.scheduled, today), parent: scheduled });
-	} else if (task.created === today) {
+	} else if (!dueKey && task.created === today) {
 		el("span", {
 			cls: ["todo-chip", "todo-due", "is-plain"],
 			text: labels.createdToday,
@@ -307,10 +350,23 @@ export function renderTaskRow(
 
 	main.addEventListener("click", (event) => {
 		event.preventDefault();
+		handlers.onSelect?.(task);
 		handlers.onOpen(task);
 	});
 
-	const canAddSubtask = !!handlers.onAddSubtask && mode === "list";
+	row.addEventListener("click", (event) => {
+		const target = event.target;
+		if (!(target instanceof Element)) return;
+		if (target.closest("button, a, input, textarea")) return;
+		handlers.onSelect?.(task);
+	});
+
+	row.addEventListener("focus", () => {
+		handlers.onSelect?.(task);
+	});
+
+	const canAddSubtask =
+		!!handlers.onAddSubtask && (mode === "list" || mode === "day");
 	const canAddMyDay =
 		mode === "suggest" && !!handlers.onAddToMyDay && checkState !== "checked";
 	const canRemoveMyDay = mode === "myday" && !!handlers.onRemoveFromMyDay;
@@ -318,19 +374,30 @@ export function renderTaskRow(
 	if (canAddSubtask || canAddMyDay || canRemoveMyDay) row.classList.add("has-action");
 
 	if (canAddSubtask) {
+		const disabled = nest?.addDisabled === true;
+		const disabledTitle =
+			nest?.addDisabledReason === "collapsed"
+				? labels.addSubtaskDisabledCollapsed
+				: nest?.addDisabledReason === "max-depth"
+					? labels.addSubtaskMaxDepth
+					: labels.addSubtask;
 		const add = el("button", {
-			cls: ["todo-task__add", "clickable-icon"],
+			cls: ["todo-task__add", "clickable-icon", disabled ? "is-disabled" : ""],
 			parent: row,
 			attr: {
 				type: "button",
-				title: labels.addSubtask,
-				"aria-label": labels.addSubtask,
+				title: disabledTitle,
+				"aria-label": disabledTitle,
+				"aria-disabled": disabled ? "true" : "false",
 			},
 		});
+		if (disabled) add.setAttribute("disabled", "true");
 		safeSetIcon(add, "plus");
 		add.addEventListener("click", (event) => {
 			event.preventDefault();
 			event.stopPropagation();
+			if (disabled) return;
+			handlers.onSelect?.(task);
 			handlers.onAddSubtask?.(task);
 		});
 	} else if (canAddMyDay) {

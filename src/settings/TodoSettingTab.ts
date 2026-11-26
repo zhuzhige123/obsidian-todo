@@ -76,6 +76,29 @@ export class TodoSettingTab extends PluginSettingTab {
 					this.plugin.refreshOpenViews();
 				});
 			});
+		new Setting(containerEl)
+			.setName(t("settingsEnableTaskMotion"))
+			.setDesc(t("settingsEnableTaskMotionDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(settings.enableTaskMotion);
+				toggle.onChange(async (value) => {
+					settings.enableTaskMotion = value;
+					await this.plugin.savePluginData();
+					this.plugin.refreshOpenViews();
+					this.renderSettings();
+				});
+			});
+		new Setting(containerEl)
+			.setName(t("settingsAutoCollapseOnParentComplete"))
+			.setDesc(t("settingsAutoCollapseOnParentCompleteDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(settings.autoCollapseOnParentComplete);
+				toggle.setDisabled(!settings.enableTaskMotion);
+				toggle.onChange(async (value) => {
+					settings.autoCollapseOnParentComplete = value;
+					await this.plugin.savePluginData();
+				});
+			});
 
 		new Setting(containerEl).setName(t("settingsExclude")).setHeading();
 		new Setting(containerEl).setName(t("settingsExclude")).setDesc(t("settingsExcludeDesc"));
