@@ -45,4 +45,43 @@ describe("task-parser", () => {
 		assert.equal(done, "- [x] Ship 📅 2026-11-26");
 		assert.equal(toggleTaskLineCompleted(done, false), raw);
 	});
+
+	it("strips wiki image embeds from title and keeps image refs", () => {
+		const task = parseTaskLine(
+			"Weave插件开发 - 待解决问题.md",
+			4,
+			"- [ ] 截图摘录在正文中的高亮范围异常 ![[QQ_1791428157252.png]]",
+		);
+		assert.ok(task);
+		assert.equal(task.title, "截图摘录在正文中的高亮范围异常");
+		assert.deepEqual(task.images, ["QQ_1791428157252.png"]);
+	});
+
+	it("builds parent/child tree from markdown indent", () => {
+		const tasks = parseTasksInMarkdown(
+			"nest.md",
+			[
+				"- [ ] Parent #work",
+				"  - [ ] Child A",
+				"  - [ ] Child B",
+				"    - [ ] Grandchild",
+				"- [ ] Sibling",
+			].join("\n"),
+		);
+		assert.equal(tasks.length, 5);
+		const parent = tasks[0];
+		const childA = tasks[1];
+		const childB = tasks[2];
+		const grand = tasks[3];
+		const sibling = tasks[4];
+		assert.ok(parent && childA && childB && grand && sibling);
+		assert.equal(parent.depth, 0);
+		assert.deepEqual(parent.childIds, [childA.id, childB.id]);
+		assert.equal(childA.parentId, parent.id);
+		assert.equal(childB.parentId, parent.id);
+		assert.equal(grand.parentId, childB.id);
+		assert.equal(grand.depth, 2);
+		assert.equal(sibling.parentId, null);
+		assert.deepEqual(sibling.childIds, []);
+	});
 });

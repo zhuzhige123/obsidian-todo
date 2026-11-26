@@ -1,6 +1,7 @@
 import type { ParsedTask } from "../types";
 import type { AttentionItem, StatusShare, TaskStatsSnapshot } from "../services/task-stats";
 import { clearChildren, el, svgEl } from "./dom";
+import { renderTagChip } from "./tag-chip";
 
 export interface StatsViewHandlers {
 	onOpen: (task: ParsedTask) => void;
@@ -88,7 +89,12 @@ function renderTagRanks(
 	const maxPct = Math.max(1, ...tags.map((t) => t.percent));
 	for (const tag of tags) {
 		const row = el("div", { cls: "todo-stats-tags__row", parent: list });
-		el("div", { cls: "todo-stats-tags__name", text: tag.label, parent: row });
+		const name = el("div", { cls: "todo-stats-tags__name", parent: row });
+		renderTagChip(name, {
+			label: tag.label,
+			tooltip: tag.tag,
+			colorKey: tag.tag,
+		});
 		const track = el("div", { cls: "todo-stats-tags__track", parent: row });
 		el("div", {
 			cls: "todo-stats-tags__fill",

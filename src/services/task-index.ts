@@ -42,6 +42,15 @@ export class TaskIndex {
 		return this.tasksById.get(id);
 	}
 
+	getByPath(path: string): ParsedTask[] {
+		return [...(this.tasksByPath.get(path) ?? [])];
+	}
+
+	/** Live id → task map for nest rollup across filtered views. */
+	getByIdMap(): Map<string, ParsedTask> {
+		return new Map(this.tasksById);
+	}
+
 	getOpenTasks(): ParsedTask[] {
 		return this.getAll().filter((t) => !t.completed);
 	}

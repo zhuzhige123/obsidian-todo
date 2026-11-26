@@ -18,6 +18,11 @@ function task(due: string, title = due): ParsedTask {
 		priority: null,
 		recurring: false,
 		hasDescription: false,
+		images: [],
+		indent: 0,
+		depth: 0,
+		parentId: null,
+		childIds: [],
 		tags: [],
 	};
 }

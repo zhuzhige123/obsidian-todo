@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -26,17 +26,46 @@ const INSTALL_DIRS = [
 
 const ARTIFACTS = ["main.js", "manifest.json", "styles.css"];
 
-function deployArtifacts() {
-	for (const outDir of INSTALL_DIRS) {
-		if (!fs.existsSync(path.dirname(outDir))) continue;
-		fs.mkdirSync(outDir, { recursive: true });
-		for (const name of ARTIFACTS) {
-			const src = path.join(__dirname, name);
-			if (!fs.existsSync(src)) continue;
-			fs.copyFileSync(src, path.join(outDir, name));
+function copyFileRetry(src, dest, tries = 5) {
+	let lastError;
+	for (let i = 0; i < tries; i++) {
+		try {
+			fs.copyFileSync(src, dest);
+			return;
+		} catch (error) {
+			lastError = error;
+			const code = error && error.code;
+			if (code !== "EBUSY" && code !== "EPERM" && code !== "EACCES") throw error;
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40 * (i + 1));
 		}
-		console.log(`[deploy] → ${outDir}`);
 	}
+	throw lastError;
+}
+
+function deployArtifacts(reason = "rebuild") {
+	let deployed = 0;
+	for (const outDir of INSTALL_DIRS) {
+		const parent = path.dirname(outDir);
+		if (!fs.existsSync(parent)) {
+			console.warn(`[deploy] skip (missing parent): ${parent}`);
+			continue;
+		}
+		try {
+			fs.mkdirSync(outDir, { recursive: true });
+			for (const name of ARTIFACTS) {
+				const src = path.join(__dirname, name);
+				if (!fs.existsSync(src)) continue;
+				copyFileRetry(src, path.join(outDir, name));
+			}
+			// Hot Reload community plugin watches this empty marker.
+			fs.writeFileSync(path.join(outDir, ".hotreload"), "");
+			deployed += 1;
+			console.log(`[deploy] ${reason} → ${outDir}`);
+		} catch (error) {
+			console.error(`[deploy] failed → ${outDir}`, error);
+		}
+	}
+	if (deployed === 0) console.warn("[deploy] no install dirs updated");
 }
 
 const deployPlugin = {
@@ -44,7 +73,7 @@ const deployPlugin = {
 	setup(build) {
 		build.onEnd((result) => {
 			if (result.errors.length > 0) return;
-			deployArtifacts();
+			deployArtifacts("js");
 		});
 	},
 };
@@ -67,7 +96,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		...builtins,
+		...builtinModules,
 	],
 	format: "cjs",
 	target: "es2020",
@@ -81,7 +110,19 @@ const context = await esbuild.context({
 if (prod) {
 	await context.rebuild();
 	process.exit(0);
-} else {
-	console.log("[dev] watching; artifacts sync to Obsidian install dirs on rebuild");
-	await context.watch();
 }
+
+console.log("[dev] watching; artifacts sync to Obsidian install dirs on rebuild");
+await context.watch();
+
+/** esbuild does not watch plain CSS — sync styles.css on its own. */
+const stylesPath = path.join(__dirname, "styles.css");
+let stylesTimer = null;
+fs.watch(stylesPath, { persistent: true }, () => {
+	if (stylesTimer) clearTimeout(stylesTimer);
+	stylesTimer = setTimeout(() => {
+		if (!fs.existsSync(stylesPath)) return;
+		deployArtifacts("css");
+	}, 80);
+});
+console.log("[dev] also watching styles.css for deploy");

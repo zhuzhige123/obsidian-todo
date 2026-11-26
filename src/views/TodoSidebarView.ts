@@ -1,4 +1,4 @@
-import { ItemView, Menu, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Menu, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type TodoPlugin from "../main";
 import type { CalendarDensity, ParsedTask, SidebarTab } from "../types";
 import type { MessageKey } from "../i18n";
@@ -13,12 +13,15 @@ import { filterTasksBySearch } from "../services/task-search";
 import { groupOverdueTasks } from "../services/overdue-buckets";
 import { computeTaskStats } from "../services/task-stats";
 import { openTaskAtLine } from "../navigation/open-task";
-import { setTaskCompleted } from "../services/task-actions";
+import { insertSubtask, setTaskCompleted } from "../services/task-actions";
 import { renderCalendar } from "../ui/calendar";
-import { renderTaskRow, type TaskRowLabels } from "../ui/task-row";
+import { createImageUrlResolver, renderTaskRow, type TaskRowLabels } from "../ui/task-row";
+import { documentGroupTitle, renderTaskGroup } from "../ui/task-group";
+import { renderTaskForest } from "../ui/task-forest";
 import { renderStatsView } from "../ui/stats-view";
 import { renderTaskListView } from "../ui/task-list-view";
 import { renderMyDayEmpty } from "../ui/myday-empty";
+import { TextPromptModal } from "../ui/text-prompt-modal";
 import { createTodoSearchPanel, type TodoSearchPanel } from "../ui/search-panel";
 import { clearChildren, el } from "../ui/dom";
 
@@ -129,8 +132,13 @@ export class TodoSidebarView extends ItemView {
 			openTask: (title) => this.t("openTask", { title }),
 			addToMyDay: this.t("addToMyDay"),
 			removeFromMyDay: this.t("removeFromMyDay"),
+			addSubtask: this.t("addSubtask"),
+			collapseChildren: this.t("collapseChildren"),
+			expandChildren: this.t("expandChildren"),
 			recurring: this.t("recurring"),
 			createdToday: this.t("createdToday"),
+			hasAttachment: this.t("hasAttachment"),
+			bugIssue: this.t("bugIssue"),
 		};
 	}
 
@@ -492,13 +500,17 @@ export class TodoSidebarView extends ItemView {
 	}
 
 	private rowHandlers() {
+		const settings = this.plugin.data.settings;
 		return {
 			onOpen: (task: ParsedTask) => {
 				void openTaskAtLine(this.app, task);
 			},
 			onToggleComplete: (task: ParsedTask, completed: boolean) => {
 				void (async () => {
-					const ok = await setTaskCompleted(this.app, task, completed);
+					const ok = await setTaskCompleted(this.app, task, completed, {
+						linkParentChild: settings.parentChildCheckLink,
+						fileTasks: this.plugin.taskIndex.getByPath(task.path),
+					});
 					if (ok && completed) this.plugin.myDay.remove(task.id);
 					await this.plugin.savePluginData();
 					window.setTimeout(() => this.refresh(), 220);
@@ -515,6 +527,35 @@ export class TodoSidebarView extends ItemView {
 				void this.plugin.savePluginData();
 				this.refresh();
 			},
+			onAddSubtask: (task: ParsedTask) => {
+				new TextPromptModal(this.app, {
+					heading: this.t("addSubtask"),
+					placeholder: this.t("addSubtaskPlaceholder"),
+					confirmLabel: this.t("addSubtaskConfirm"),
+					onSubmit: (title) => {
+						void (async () => {
+							const created = await insertSubtask(
+								this.app,
+								task,
+								title,
+								this.plugin.taskIndex.getByPath(task.path),
+							);
+							if (!created) return;
+							const file = this.app.vault.getAbstractFileByPath(created.path);
+							if (file instanceof TFile) await this.plugin.taskIndex.refreshFile(file);
+							const fresh = this.plugin.taskIndex
+								.getByPath(created.path)
+								.find((t) => t.line === created.line);
+							if (fresh) void openTaskAtLine(this.app, fresh);
+							this.refresh();
+						})();
+					},
+				}).open();
+			},
+			onNestCollapse: () => {
+				this.refresh();
+			},
+			resolveImageUrl: createImageUrlResolver(this.app),
 		};
 	}
 
@@ -612,11 +653,15 @@ export class TodoSidebarView extends ItemView {
 		const all = this.plugin.taskIndex.getAll();
 		const tasks = filterTasksBySearch(all, this.searchQuery);
 		this.updateSearchMatch(tasks.length, all.length);
+		const settings = this.plugin.data.settings;
 		renderTaskListView(this.listHost, {
 			tasks,
-			groupMode: this.plugin.data.settings.listGroupMode,
-			hideCompleted: this.plugin.data.settings.listHideCompleted,
+			groupMode: settings.listGroupMode,
+			hideCompleted: settings.listHideCompleted,
 			handlers: this.rowHandlers(),
+			indexById: this.plugin.taskIndex.getByIdMap(),
+			linkParentChild: settings.parentChildCheckLink,
+			showNestGuideLines: settings.showNestGuideLines,
 			labels: {
 				title: this.t("listTitle"),
 				empty: this.searchQuery.trim() ? this.t("noMatch") : this.t("listEmpty"),
@@ -707,18 +752,38 @@ export class TodoSidebarView extends ItemView {
 			return;
 		}
 
-		if (!this.plugin.data.settings.groupByDocument) {
-			for (const task of tasks) renderTaskRow(this.dayListHost, task, "day", handlers, labels);
+		const settings = this.plugin.data.settings;
+		const nestOpts = {
+			indexById: this.plugin.taskIndex.getByIdMap(),
+			linkParentChild: settings.parentChildCheckLink,
+			showNestGuideLines: settings.showNestGuideLines,
+		};
+
+		if (!settings.groupByDocument) {
+			renderTaskForest({
+				parent: this.dayListHost,
+				tasks,
+				mode: "day",
+				handlers,
+				labels,
+				...nestOpts,
+			});
 			return;
 		}
 
 		for (const [path, list] of groupTasksByPath(tasks)) {
-			const group = el("div", { cls: "todo-group", parent: this.dayListHost });
-			const head = el("div", { cls: "todo-group__head", parent: group });
-			const ico = el("span", { parent: head });
-			setIcon(ico, "file");
-			el("span", { cls: "todo-group__path", text: path, parent: head });
-			for (const task of list) renderTaskRow(group, task, "day", handlers, labels);
+			renderTaskGroup(this.dayListHost, {
+				variant: "document",
+				title: documentGroupTitle(path),
+				tooltip: path,
+				collapseKey: `day:${path}`,
+				countLabel: this.t("listCount", { count: list.length }),
+				tasks: list,
+				handlers,
+				rowLabels: labels,
+				rowMode: "day",
+				...nestOpts,
+			});
 		}
 	}
 }

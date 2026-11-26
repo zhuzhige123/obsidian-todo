@@ -1,4 +1,3 @@
-import { setIcon } from "obsidian";
 import type { ListGroupMode, ParsedTask } from "../types";
 import {
 	groupTasksByPath,
@@ -6,7 +5,10 @@ import {
 	sortTasksForList,
 } from "../services/task-queries";
 import { clearChildren, el } from "./dom";
-import { renderTaskRow, type TaskRowHandlers, type TaskRowLabels } from "./task-row";
+import { tagChipLabel } from "../utils/note-path";
+import { documentGroupTitle, renderTaskGroup } from "./task-group";
+import { renderTaskForest } from "./task-forest";
+import { type TaskRowHandlers, type TaskRowLabels } from "./task-row";
 
 export interface TaskListViewLabels {
 	title: string;
@@ -22,29 +24,9 @@ export interface TaskListViewOptions {
 	hideCompleted: boolean;
 	labels: TaskListViewLabels;
 	handlers: TaskRowHandlers;
-}
-
-function renderGroup(
-	parent: HTMLElement,
-	title: string,
-	countLabel: string,
-	icon: string,
-	tasks: ParsedTask[],
-	handlers: TaskRowHandlers,
-	rowLabels: TaskRowLabels,
-): void {
-	if (!tasks.length) return;
-	const group = el("div", { cls: "todo-group", parent });
-	const head = el("div", { cls: "todo-group__head", parent: group });
-	const ico = el("span", { parent: head });
-	try {
-		setIcon(ico, icon);
-	} catch {
-		ico.textContent = "";
-	}
-	el("span", { cls: "todo-group__path", text: title, parent: head });
-	el("span", { cls: "todo-section__meta", text: countLabel, parent: head });
-	for (const task of tasks) renderTaskRow(group, task, "list", handlers, rowLabels);
+	indexById?: Map<string, ParsedTask>;
+	linkParentChild?: boolean;
+	showNestGuideLines?: boolean;
 }
 
 export function renderTaskListView(host: HTMLElement, options: TaskListViewOptions): void {
@@ -67,22 +49,39 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 		return;
 	}
 
+	const nestOpts = {
+		indexById: options.indexById,
+		linkParentChild: options.linkParentChild !== false,
+		showNestGuideLines: options.showNestGuideLines === true,
+	};
+
 	if (options.groupMode === "flat") {
-		for (const task of tasks) renderTaskRow(scroll, task, "list", handlers, labels.row);
+		renderTaskForest({
+			parent: scroll,
+			tasks,
+			mode: "list",
+			handlers,
+			labels: labels.row,
+			rowOptions: { hideSource: true },
+			...nestOpts,
+		});
 		return;
 	}
 
 	if (options.groupMode === "document") {
 		for (const [path, list] of groupTasksByPath(tasks)) {
-			renderGroup(
-				scroll,
-				path,
-				labels.count(list.length),
-				"file",
-				sortTasksForList(list),
+			renderTaskGroup(scroll, {
+				variant: "document",
+				title: documentGroupTitle(path),
+				tooltip: path,
+				collapseKey: `doc:${path}`,
+				countLabel: labels.count(list.length),
+				tasks: sortTasksForList(list),
 				handlers,
-				labels.row,
-			);
+				rowLabels: labels.row,
+				rowMode: "list",
+				...nestOpts,
+			});
 		}
 		return;
 	}
@@ -96,14 +95,24 @@ export function renderTaskListView(host: HTMLElement, options: TaskListViewOptio
 	});
 	for (const key of keys) {
 		const list = byTag.get(key) ?? [];
-		renderGroup(
-			scroll,
-			key === untaggedKey ? labels.untagged : key,
-			labels.count(list.length),
-			key === untaggedKey ? "hash" : "tag",
-			sortTasksForList(list),
+		const isUntagged = key === untaggedKey;
+		const rawTag = isUntagged ? labels.untagged : key;
+		renderTaskGroup(scroll, {
+			variant: "tag",
+			chips: [
+				{
+					label: isUntagged ? labels.untagged : tagChipLabel(key),
+					tooltip: rawTag,
+					colorKey: isUntagged ? undefined : key,
+				},
+			],
+			collapseKey: `tag:${key}`,
+			countLabel: labels.count(list.length),
+			tasks: sortTasksForList(list),
 			handlers,
-			labels.row,
-		);
+			rowLabels: labels.row,
+			rowMode: "list",
+			...nestOpts,
+		});
 	}
 }

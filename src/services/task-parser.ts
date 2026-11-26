@@ -1,3 +1,4 @@
+import { TASK_MAX_DEPTH } from "../constants";
 import type { ParsedTask, TaskPriority } from "../types";
 
 const TASK_LINE_RE = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/;
@@ -11,6 +12,10 @@ const CREATED_RE = new RegExp(String.raw`➕\s*(${DATE_TOKEN})`);
 const DONE_RE = new RegExp(String.raw`✅\s*(${DATE_TOKEN})`);
 const RECURRING_RE = /🔁/;
 const TAG_RE = /#([^\s#]+)/g;
+/** Obsidian wiki image embed: `![[file.png]]` / `![[file.png|100]]` */
+const WIKI_EMBED_RE = /!\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]/g;
+/** Standard markdown image: `![alt](path)` */
+const MD_IMAGE_RE = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 const PRIORITY_MARKERS: Array<{ marker: string; priority: TaskPriority }> = [
 	{ marker: "🔺", priority: "highest" },
@@ -37,8 +42,38 @@ function toDateKey(token: string | undefined): string | null {
 	return m?.[1] ?? null;
 }
 
-function fingerprint(path: string, title: string, due: string | null, scheduled: string | null): string {
-	return `${path}::${title}::${due ?? ""}::${scheduled ?? ""}`;
+function fingerprint(
+	path: string,
+	line: number,
+	title: string,
+	due: string | null,
+	scheduled: string | null,
+): string {
+	return `${path}::${line}::${title}::${due ?? ""}::${scheduled ?? ""}`;
+}
+
+/** Count leading indent; tabs count as 2 spaces (common Obsidian default). */
+export function measureIndent(prefix: string): number {
+	let width = 0;
+	for (const ch of prefix) {
+		width += ch === "\t" ? 2 : 1;
+	}
+	return width;
+}
+
+function extractImages(body: string): { images: string[]; without: string } {
+	const images: string[] = [];
+	let without = body.replace(WIKI_EMBED_RE, (_full, target: string) => {
+		const path = target.trim();
+		if (path) images.push(path);
+		return " ";
+	});
+	without = without.replace(MD_IMAGE_RE, (_full, _alt: string, target: string) => {
+		const path = target.trim();
+		if (path) images.push(path);
+		return " ";
+	});
+	return { images, without };
 }
 
 function stripMarkers(body: string): string {
@@ -70,20 +105,26 @@ export function parseTaskLine(path: string, line: number, raw: string): ParsedTa
 	const matched = raw.match(TASK_LINE_RE);
 	if (!matched) return null;
 
+	const indent = measureIndent(matched[1] ?? "");
 	const completed = matched[2].toLowerCase() === "x";
 	const body = matched[3] ?? "";
 	const due = toDateKey(body.match(DUE_RE)?.[1]);
 	const scheduled = toDateKey(body.match(SCHEDULED_RE)?.[1]);
 	const created = toDateKey(body.match(CREATED_RE)?.[1]);
 	const doneDate = toDateKey(body.match(DONE_RE)?.[1]);
-	const title = stripMarkers(body);
+	const { images, without: bodyWithoutImages } = extractImages(body);
+	const title = stripMarkers(bodyWithoutImages);
 	if (!title) return null;
 
 	return {
-		id: fingerprint(path, title, due, scheduled),
+		id: fingerprint(path, line, title, due, scheduled),
 		path,
 		line,
 		raw,
+		indent,
+		depth: 0,
+		parentId: null,
+		childIds: [],
 		completed,
 		title,
 		due,
@@ -93,8 +134,31 @@ export function parseTaskLine(path: string, line: number, raw: string): ParsedTa
 		priority: parsePriority(body),
 		recurring: RECURRING_RE.test(body),
 		hasDescription: false,
+		images,
 		tags: parseTags(body),
 	};
+}
+
+/** Wire parent/child from indent stack within one file (document order). */
+export function linkTaskTree(tasks: ParsedTask[]): void {
+	const stack: ParsedTask[] = [];
+	for (const task of tasks) {
+		task.parentId = null;
+		task.childIds = [];
+		task.depth = 0;
+		while (stack.length > 0) {
+			const top = stack[stack.length - 1];
+			if (!top || top.indent < task.indent) break;
+			stack.pop();
+		}
+		const parent = stack[stack.length - 1];
+		if (parent) {
+			task.parentId = parent.id;
+			parent.childIds.push(task.id);
+			task.depth = Math.min(TASK_MAX_DEPTH, parent.depth + 1);
+		}
+		stack.push(task);
+	}
 }
 
 export function parseTasksInMarkdown(path: string, content: string): ParsedTask[] {
@@ -104,6 +168,7 @@ export function parseTasksInMarkdown(path: string, content: string): ParsedTask[
 		const task = parseTaskLine(path, i, lines[i] ?? "");
 		if (task) tasks.push(task);
 	}
+	linkTaskTree(tasks);
 	return tasks;
 }
 
@@ -113,4 +178,11 @@ export function toggleTaskLineCompleted(raw: string, completed: boolean): string
 		/^(\s*[-*+]\s+)\[([ xX])\]/,
 		(`$1[${completed ? "x" : " "}]`),
 	);
+}
+
+/** Indent prefix for a child one step deeper than parent (2 spaces). */
+export function childIndentPrefix(parentRaw: string): string {
+	const matched = parentRaw.match(/^(\s*)/);
+	const base = matched?.[1] ?? "";
+	return `${base}  `;
 }

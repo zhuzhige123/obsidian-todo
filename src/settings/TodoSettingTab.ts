@@ -53,6 +53,30 @@ export class TodoSettingTab extends PluginSettingTab {
 				});
 			});
 
+		new Setting(containerEl).setName(t("settingsNestHeading")).setHeading();
+		new Setting(containerEl)
+			.setName(t("settingsParentChildCheckLink"))
+			.setDesc(t("settingsParentChildCheckLinkDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(settings.parentChildCheckLink);
+				toggle.onChange(async (value) => {
+					settings.parentChildCheckLink = value;
+					await this.plugin.savePluginData();
+					this.plugin.refreshOpenViews();
+				});
+			});
+		new Setting(containerEl)
+			.setName(t("settingsShowNestGuideLines"))
+			.setDesc(t("settingsShowNestGuideLinesDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(settings.showNestGuideLines);
+				toggle.onChange(async (value) => {
+					settings.showNestGuideLines = value;
+					await this.plugin.savePluginData();
+					this.plugin.refreshOpenViews();
+				});
+			});
+
 		new Setting(containerEl).setName(t("settingsExclude")).setHeading();
 		new Setting(containerEl).setName(t("settingsExclude")).setDesc(t("settingsExcludeDesc"));
 		this.renderExcludedFolders(containerEl);

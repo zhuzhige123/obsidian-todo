@@ -19,15 +19,23 @@ export function isSidebarTab(value: unknown): value is SidebarTab {
 export type TaskPriority = "highest" | "high" | "medium" | "low" | "lowest" | null;
 
 export interface ParsedTask {
-	/** Stable key within a vault snapshot: path + content fingerprint */
+	/** Stable key within a vault snapshot: path + line + content fingerprint */
 	id: string;
 	path: string;
 	line: number;
 	/** Raw markdown line */
 	raw: string;
+	/** Leading whitespace width (spaces; tab = 2) used for tree building */
+	indent: number;
+	/** Nesting depth 0…5 */
+	depth: number;
+	/** Parent task id within the same file, if any */
+	parentId: string | null;
+	/** Direct child task ids in document order */
+	childIds: string[];
 	/** Checkbox status */
 	completed: boolean;
-	/** Visible title without emoji markers */
+	/** Visible title without emoji markers / image embeds */
 	title: string;
 	due: string | null;
 	scheduled: string | null;
@@ -36,6 +44,8 @@ export interface ParsedTask {
 	priority: TaskPriority;
 	recurring: boolean;
 	hasDescription: boolean;
+	/** Wiki/markdown image embed targets stripped from the title */
+	images: string[];
 	tags: string[];
 }
 
@@ -52,6 +62,13 @@ export interface TodoPluginSettings {
 	listGroupMode: ListGroupMode;
 	/** Hide completed tasks in the Tasks list tab */
 	listHideCompleted: boolean;
+	/**
+	 * When true, checking a parent cascades to children and children roll up
+	 * to parent (incl. indeterminate). When false, checkboxes are independent.
+	 */
+	parentChildCheckLink: boolean;
+	/** Draw faint dashed nest guides under indented tasks */
+	showNestGuideLines: boolean;
 	/** Folder paths to exclude from scanning (vault-relative) */
 	excludeFolders: string[];
 }
@@ -73,6 +90,8 @@ export const DEFAULT_SETTINGS: TodoPluginSettings = {
 	showListTab: true,
 	listGroupMode: "document",
 	listHideCompleted: true,
+	parentChildCheckLink: true,
+	showNestGuideLines: false,
 	excludeFolders: [],
 };
 
@@ -99,6 +118,14 @@ export function normalizeSettings(partial?: Partial<TodoPluginSettings>): TodoPl
 			partial?.listGroupMode === "tag"
 				? partial.listGroupMode
 				: DEFAULT_SETTINGS.listGroupMode,
+		parentChildCheckLink:
+			typeof partial?.parentChildCheckLink === "boolean"
+				? partial.parentChildCheckLink
+				: DEFAULT_SETTINGS.parentChildCheckLink,
+		showNestGuideLines:
+			typeof partial?.showNestGuideLines === "boolean"
+				? partial.showNestGuideLines
+				: DEFAULT_SETTINGS.showNestGuideLines,
 	};
 	return merged;
 }
