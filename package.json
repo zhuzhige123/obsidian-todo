@@ -1,0 +1,26 @@
+{
+	"name": "todo",
+	"version": "0.1.0",
+	"description": "Obsidian sidebar TODO plugin with My Day, suggestions, calendar workspace, and statistics.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "node --import tsx --test src/**/*.test.ts"
+	},
+	"keywords": [
+		"obsidian",
+		"plugin",
+		"todo",
+		"tasks"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.10.0",
+		"builtin-modules": "^4.0.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "^1.8.7",
+		"tsx": "^4.19.0",
+		"typescript": "^5.7.0"
+	}
+}

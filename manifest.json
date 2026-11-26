@@ -1,0 +1,10 @@
+{
+	"id": "todo",
+	"name": "TODO",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Sidebar task manager with My Day, smart suggestions, and a calendar day workspace. Compatible with Tasks plugin syntax.",
+	"author": "lihua",
+	"authorUrl": "https://github.com/zhuzhige123",
+	"isDesktopOnly": false
+}
