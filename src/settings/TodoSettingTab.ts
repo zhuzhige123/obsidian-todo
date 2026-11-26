@@ -15,14 +15,26 @@ export class TodoSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	/**
+	 * Declared for Obsidian 1.13+ settings search lint.
+	 * Empty array keeps the imperative `display()` path for complex folder UI.
+	 */
+	getSettingDefinitions(): [] {
+		return [];
+	}
+
 	display(): void {
+		this.renderSettings();
+	}
+
+	private renderSettings(): void {
 		const { containerEl } = this;
 		containerEl.empty();
 		const t = (key: Parameters<TodoPlugin["t"]>[0], vars?: Record<string, string | number>) =>
 			this.plugin.t(key, vars);
 		const settings = this.plugin.data.settings;
 
-		containerEl.createEl("h2", { text: t("pluginName") });
+		new Setting(containerEl).setName(t("pluginName")).setHeading();
 
 		new Setting(containerEl)
 			.setName(t("settingsLanguage"))
@@ -37,11 +49,11 @@ export class TodoSettingTab extends PluginSettingTab {
 					settings.locale = value as LocalePreference;
 					await this.plugin.savePluginData();
 					this.plugin.refreshOpenViews();
-					this.display();
+					this.renderSettings();
 				});
 			});
 
-		containerEl.createEl("h3", { text: t("settingsExclude") });
+		new Setting(containerEl).setName(t("settingsExclude")).setHeading();
 		new Setting(containerEl).setName(t("settingsExclude")).setDesc(t("settingsExcludeDesc"));
 		this.renderExcludedFolders(containerEl);
 	}
@@ -58,7 +70,7 @@ export class TodoSettingTab extends PluginSettingTab {
 			this.plugin.taskIndex.setExcludeFolders(folders);
 			new Notice(t("settingsExcludeApply"), 2500);
 			void this.plugin.taskIndex.rebuild();
-			this.display();
+			this.renderSettings();
 		};
 
 		if (!settings.excludeFolders.length) {

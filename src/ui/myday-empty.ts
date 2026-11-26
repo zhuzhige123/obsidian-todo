@@ -1,4 +1,4 @@
-import { clearChildren, el } from "./dom";
+import { clearChildren, el, svgEl } from "./dom";
 
 export interface MyDayEmptyHandlers {
 	onAddTasks: () => void;
@@ -19,10 +19,14 @@ function renderIllustration(parent: HTMLElement): void {
 		attr: { "aria-hidden": "true" },
 	});
 
-	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-	svg.setAttribute("class", "todo-myday-empty__svg");
-	svg.setAttribute("viewBox", "0 0 120 108");
-	svg.setAttribute("role", "presentation");
+	const svg = svgEl("svg", {
+		cls: "todo-myday-empty__svg",
+		parent: wrap,
+		attr: {
+			viewBox: "0 0 120 108",
+			role: "presentation",
+		},
+	});
 	svg.innerHTML = `
 		<g fill="none" fill-rule="evenodd">
 			<path class="todo-myday-empty__spark" d="M18 34l1.6 3.4L23 39l-3.4 1.6L18 44l-1.6-3.4L13 39l3.4-1.6z"/>
@@ -44,7 +48,6 @@ function renderIllustration(parent: HTMLElement): void {
 			<circle class="todo-myday-empty__sun-core" cx="92" cy="30" r="7.5"/>
 		</g>
 	`;
-	wrap.appendChild(svg);
 }
 
 /**

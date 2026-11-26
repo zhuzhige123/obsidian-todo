@@ -22,30 +22,30 @@ export function groupOverdueTasks(tasks: ParsedTask[], today: string): OverdueSe
 	const thisWeekStart = startOfWeekMonday(today);
 	const lastWeekStart = addDays(thisWeekStart, -7);
 
-	const buckets: OverdueSection[] = [
-		{ id: "older-than-year", title: "去年及更久", tasks: [] },
-		{ id: "earlier", title: "更早", tasks: [] },
-		{ id: "past-month", title: "最近一个月", tasks: [] },
-		{ id: "last-week", title: "上周", tasks: [] },
-		{ id: "earlier-this-week", title: "本周更早", tasks: [] },
-	];
+	const olderThanYear: OverdueSection = { id: "older-than-year", title: "去年及更久", tasks: [] };
+	const earlier: OverdueSection = { id: "earlier", title: "更早", tasks: [] };
+	const pastMonth: OverdueSection = { id: "past-month", title: "最近一个月", tasks: [] };
+	const lastWeek: OverdueSection = { id: "last-week", title: "上周", tasks: [] };
+	const earlierThisWeek: OverdueSection = { id: "earlier-this-week", title: "本周更早", tasks: [] };
 
 	const sorted = [...tasks].sort((a, b) => (a.due ?? "").localeCompare(b.due ?? ""));
 	for (const task of sorted) {
 		const due = task.due;
 		if (!due || due >= today) continue;
 		if (due < yearStart) {
-			buckets[0]!.tasks.push(task);
+			olderThanYear.tasks.push(task);
 		} else if (due < monthAgo) {
-			buckets[1]!.tasks.push(task);
+			earlier.tasks.push(task);
 		} else if (due < lastWeekStart) {
-			buckets[2]!.tasks.push(task);
+			pastMonth.tasks.push(task);
 		} else if (due < thisWeekStart) {
-			buckets[3]!.tasks.push(task);
+			lastWeek.tasks.push(task);
 		} else {
-			buckets[4]!.tasks.push(task);
+			earlierThisWeek.tasks.push(task);
 		}
 	}
 
-	return buckets.filter((b) => b.tasks.length > 0);
+	return [olderThanYear, earlier, pastMonth, lastWeek, earlierThisWeek].filter(
+		(bucket) => bucket.tasks.length > 0,
+	);
 }

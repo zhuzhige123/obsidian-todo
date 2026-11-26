@@ -27,7 +27,6 @@ export interface TodoSearchPanel {
  * - folder / tag use a secondary FloatingMenu panel
  * - Suggestions only open for bare prefixes (`due:`), never for `due:today`
  */
-type OptionsPanel = "options" | null;
 type SuggestPanel = "folder" | "tags" | null;
 
 const PORTAL_OPTIONS = "todo-search-floating-menu todo-search-floating-menu--options";
@@ -99,7 +98,7 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 			autocomplete: "off",
 			spellcheck: "false",
 		},
-	}) as HTMLInputElement;
+	});
 
 	const matchCount = el("span", { cls: "todo-match-count", parent: wrapper });
 	matchCount.hidden = true;
@@ -121,7 +120,6 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 	document.body.appendChild(suggestMenu);
 
 	let chromeOpen = false;
-	let optionsOpen: OptionsPanel = null;
 	let suggestPanel: SuggestPanel = null;
 	let suggestQuery = "";
 	let activeMenu: Menu | null = null;
@@ -143,12 +141,10 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 			return;
 		}
 		const width = Math.max(220, Math.round(rect.width));
-		portal.style.position = "fixed";
+		// Static chrome (position/max-width/z-index) lives in CSS; only place dynamically.
 		portal.style.left = `${Math.round(rect.left)}px`;
 		portal.style.top = `${Math.round(rect.bottom + 4)}px`;
 		portal.style.width = `${width}px`;
-		portal.style.maxWidth = "calc(100vw - 16px)";
-		portal.style.zIndex = "1600";
 	};
 
 	const closeActiveMenu = () => {
@@ -159,7 +155,6 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 	};
 
 	const hideOptions = () => {
-		optionsOpen = null;
 		optionsMenu.hidden = true;
 		clearChildren(optionsMenu);
 	};
@@ -241,7 +236,6 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 		if (destroyed || !chromeOpen) return;
 		closeActiveMenu();
 		hideSuggestPanel();
-		optionsOpen = "options";
 		renderOptions();
 		positionPortal(optionsMenu);
 		optionsMenu.hidden = false;
@@ -315,7 +309,7 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 				placeholder:
 					suggestPanel === "folder" ? "搜索要包含的文件夹..." : "过滤标签…",
 			},
-		}) as HTMLInputElement;
+		});
 		filterInput.value = suggestQuery;
 		filterInput.addEventListener("mousedown", (event) => event.stopPropagation());
 		filterInput.addEventListener("input", () => {
@@ -468,7 +462,7 @@ export function createTodoSearchPanel(hosts: TodoSearchPanelHosts): TodoSearchPa
 		if (root.contains(target)) return;
 		if (optionsMenu.contains(target) || suggestMenu.contains(target)) return;
 		// Obsidian Menu lives under body `.menu` — don't treat as outside for options close timing.
-		if (target instanceof Element && target.closest(".menu")) return;
+		if (target.instanceOf(Element) && target.closest(".menu")) return;
 		hideOptions();
 		hideSuggestPanel();
 	};

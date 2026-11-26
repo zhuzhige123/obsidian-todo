@@ -1,6 +1,6 @@
 import type { ParsedTask } from "../types";
 import type { AttentionItem, StatusShare, TaskStatsSnapshot } from "../services/task-stats";
-import { clearChildren, el } from "./dom";
+import { clearChildren, el, svgEl } from "./dom";
 
 export interface StatsViewHandlers {
 	onOpen: (task: ParsedTask) => void;
@@ -29,34 +29,42 @@ function renderRing(parent: HTMLElement, item: StatusShare): void {
 		parent,
 		attr: { title: `${item.label} ${item.count}` },
 	});
-	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-	svg.setAttribute("class", "todo-stats-ring__svg");
-	svg.setAttribute("viewBox", "0 0 36 36");
-	svg.setAttribute("aria-hidden", "true");
+	const svg = svgEl("svg", {
+		cls: "todo-stats-ring__svg",
+		attr: {
+			viewBox: "0 0 36 36",
+			"aria-hidden": "true",
+		},
+	});
 
-	const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-	track.setAttribute("class", "todo-stats-ring__track");
-	track.setAttribute("cx", "18");
-	track.setAttribute("cy", "18");
-	track.setAttribute("r", "15.5");
-	track.setAttribute("fill", "none");
-	track.setAttribute("stroke-width", "3.2");
-	track.setAttribute("pathLength", "100");
+	svgEl("circle", {
+		cls: "todo-stats-ring__track",
+		parent: svg,
+		attr: {
+			cx: "18",
+			cy: "18",
+			r: "15.5",
+			fill: "none",
+			"stroke-width": "3.2",
+			pathLength: "100",
+		},
+	});
 
-	const value = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-	value.setAttribute("class", "todo-stats-ring__value");
-	value.setAttribute("cx", "18");
-	value.setAttribute("cy", "18");
-	value.setAttribute("r", "15.5");
-	value.setAttribute("fill", "none");
-	value.setAttribute("stroke-width", "3.2");
-	value.setAttribute("pathLength", "100");
-	value.setAttribute("stroke-dasharray", `${item.percent} ${Math.max(0, 100 - item.percent)}`);
-	value.setAttribute("stroke-dashoffset", "25");
-	value.setAttribute("stroke-linecap", "round");
-
-	svg.appendChild(track);
-	svg.appendChild(value);
+	svgEl("circle", {
+		cls: "todo-stats-ring__value",
+		parent: svg,
+		attr: {
+			cx: "18",
+			cy: "18",
+			r: "15.5",
+			fill: "none",
+			"stroke-width": "3.2",
+			pathLength: "100",
+			"stroke-dasharray": `${item.percent} ${Math.max(0, 100 - item.percent)}`,
+			"stroke-dashoffset": "25",
+			"stroke-linecap": "round",
+		},
+	});
 	const dial = el("div", { cls: "todo-stats-ring__dial", parent: cell });
 	dial.appendChild(svg);
 	el("div", {

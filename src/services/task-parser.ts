@@ -28,7 +28,7 @@ const STRIP_MARKERS_RE = new RegExp(
 		String.raw`[🔺⏫🔼🔽⏬]`,
 		String.raw`(?:^|\s)(?:id|blockId|dependsOn|onCompletion|created|scheduled|due|start|done)::\S+`,
 	].join("|"),
-	"gi",
+	"giu",
 );
 
 function toDateKey(token: string | undefined): string | null {

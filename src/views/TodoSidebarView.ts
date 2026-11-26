@@ -166,7 +166,7 @@ export class TodoSidebarView extends ItemView {
 			cls: ["clickable-icon", "nav-action-button"],
 			parent: buttons,
 			attr: { type: "button", "aria-label": this.t("search"), title: this.t("search") },
-		}) as HTMLButtonElement;
+		});
 		setIcon(this.searchBtnEl, "search");
 		this.searchBtnEl.addEventListener("click", () => {
 			this.searchOpen = !this.searchOpen;
@@ -254,7 +254,7 @@ export class TodoSidebarView extends ItemView {
 				"aria-pressed": "false",
 				"data-tab": tab,
 			},
-		}) as HTMLButtonElement;
+		});
 		try {
 			setIcon(btn, icon);
 		} catch {

@@ -1,3 +1,5 @@
+/** Obsidian-native DOM helpers — prefer createEl/createSvg over document.createElement*. */
+
 export function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
 	options?: {
@@ -7,22 +9,47 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 		parent?: HTMLElement;
 	},
 ): HTMLElementTagNameMap[K] {
-	const node = document.createElement(tag);
-	if (options?.cls) {
-		const raw = Array.isArray(options.cls) ? options.cls : [options.cls];
-		const list = raw.flatMap((item) => item.split(/\s+/)).filter(Boolean);
-		if (list.length) node.classList.add(...list);
-	}
-	if (options?.text != null) node.textContent = options.text;
-	if (options?.attr) {
-		for (const [key, value] of Object.entries(options.attr)) {
-			if (value != null) node.setAttribute(key, value);
-		}
-	}
-	options?.parent?.appendChild(node);
-	return node;
+	const attr =
+		options?.attr == null
+			? undefined
+			: Object.fromEntries(
+					Object.entries(options.attr).filter(
+						(entry): entry is [string, string] => entry[1] != null,
+					),
+				);
+
+	return createEl(tag, {
+		cls: options?.cls,
+		text: options?.text,
+		attr,
+		parent: options?.parent,
+	});
+}
+
+export function svgEl<K extends keyof SVGElementTagNameMap>(
+	tag: K,
+	options?: {
+		cls?: string | string[];
+		attr?: Record<string, string | number | undefined>;
+		parent?: Element;
+	},
+): SVGElementTagNameMap[K] {
+	const attr =
+		options?.attr == null
+			? undefined
+			: Object.fromEntries(
+					Object.entries(options.attr).filter(
+						(entry): entry is [string, string | number] => entry[1] != null,
+					),
+				);
+
+	return createSvg(tag, {
+		cls: options?.cls,
+		attr,
+		parent: options?.parent,
+	});
 }
 
 export function clearChildren(node: HTMLElement): void {
-	while (node.firstChild) node.removeChild(node.firstChild);
+	node.empty();
 }

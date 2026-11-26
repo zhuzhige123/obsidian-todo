@@ -38,7 +38,7 @@ export default class TodoPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "open-todo-sidebar",
+			id: "open-sidebar",
 			name: this.t("commandOpenSidebar"),
 			callback: () => {
 				void this.activateSidebar();
@@ -120,12 +120,13 @@ export default class TodoPlugin extends Plugin {
 	async activateSidebar(): Promise<void> {
 		const { workspace } = this.app;
 		const existing = workspace.getLeavesOfType(TODO_SIDEBAR_VIEW_TYPE);
-		if (existing.length > 0) {
-			workspace.revealLeaf(existing[0]!);
+		const first = existing[0];
+		if (first) {
+			await workspace.revealLeaf(first);
 			return;
 		}
 		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TODO_SIDEBAR_VIEW_TYPE, active: true });
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 	}
 }

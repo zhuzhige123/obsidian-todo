@@ -209,8 +209,9 @@
 
 /* Weave CardSearchInput: FloatingMenu shell on body is transparent; panel inside is solid. */
 body > .todo-search-floating-menu {
+	position: fixed;
 	min-width: 0;
-	max-width: none;
+	max-width: calc(100vw - 16px);
 	padding: 0;
 	border: none;
 	background: transparent;
