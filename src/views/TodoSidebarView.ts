@@ -396,16 +396,8 @@ export class TodoSidebarView extends ItemView {
 		});
 		setIcon(this.searchBtnEl, "search");
 		this.searchBtnEl.addEventListener("click", () => {
-			this.searchOpen = !this.searchOpen;
-			this.searchBtnEl?.classList.toggle("is-active", this.searchOpen);
-			this.searchPanelEl?.classList.toggle("is-open", this.searchOpen);
-			this.searchPanel?.setOpen(this.searchOpen);
-			if (this.searchOpen) this.searchPanel?.focus();
-			else {
-				this.searchQuery = "";
-				this.searchPanel?.clear();
-				this.refresh();
-			}
+			if (this.searchOpen) this.closeSearch();
+			else this.openSearch();
 		});
 
 		const toolsBtn = el("button", {
@@ -566,6 +558,30 @@ export class TodoSidebarView extends ItemView {
 		void this.plugin.savePluginData();
 		this.searchPanel?.dismissSuggest();
 		this.syncTabButtons();
+		this.refresh();
+	}
+
+	/** Search only filters while the panel is open; closed panel = normal view. */
+	private getActiveSearchQuery(): string {
+		return this.searchOpen ? this.searchQuery : "";
+	}
+
+	private openSearch(): void {
+		this.searchOpen = true;
+		this.searchBtnEl?.classList.add("is-active");
+		this.searchPanelEl?.classList.add("is-open");
+		this.searchPanel?.setOpen(true);
+		this.searchPanel?.focus();
+	}
+
+	/** Close panel and drop any leftover query so tabs are never stuck in filter mode. */
+	private closeSearch(): void {
+		this.searchOpen = false;
+		this.searchQuery = "";
+		this.searchBtnEl?.classList.remove("is-active");
+		this.searchPanelEl?.classList.remove("is-open");
+		this.searchPanel?.setOpen(false);
+		this.searchPanel?.clear();
 		this.refresh();
 	}
 
@@ -895,7 +911,7 @@ export class TodoSidebarView extends ItemView {
 	}
 
 	private updateSearchMatch(matched: number, total: number): void {
-		this.searchPanel?.setMatchCount(matched, total, this.searchQuery);
+		this.searchPanel?.setMatchCount(matched, total, this.getActiveSearchQuery());
 	}
 
 	private refreshMyDay(): void {
@@ -904,10 +920,13 @@ export class TodoSidebarView extends ItemView {
 		const base = ids
 			.map((id) => this.plugin.taskIndex.getById(id))
 			.filter((t): t is ParsedTask => !!t && !t.completed);
-		const tasks = filterTasksBySearch(base, this.searchQuery);
+		const query = this.getActiveSearchQuery();
+		const searching = query.trim().length > 0;
+		const tasks = filterTasksBySearch(base, query);
 		this.updateSearchMatch(tasks.length, base.length);
 
-		if (!ids.length) {
+		/* No open tasks and not searching → real empty state (never "no match"). */
+		if (!base.length && !searching) {
 			this.myDayHost.classList.add("is-empty");
 			renderMyDayEmpty(
 				this.myDayHost,
@@ -935,6 +954,7 @@ export class TodoSidebarView extends ItemView {
 
 		const scroll = el("div", { cls: "todo-scroll", parent: this.myDayHost });
 		if (!tasks.length) {
+			/* Reachable only while searching — non-search empty already returned above. */
 			el("div", { cls: "todo-empty", text: this.t("noMatch"), parent: scroll });
 			return;
 		}
@@ -952,9 +972,10 @@ export class TodoSidebarView extends ItemView {
 		const exclude = new Set(this.plugin.myDay.getIds());
 		const buckets = getSuggestionBuckets(this.plugin.taskIndex.getAll(), today, exclude);
 		const pool = [...buckets.overdue, ...buckets.dueToday, ...buckets.soon];
-		const overdue = filterTasksBySearch(buckets.overdue, this.searchQuery);
-		const dueToday = filterTasksBySearch(buckets.dueToday, this.searchQuery);
-		const soon = filterTasksBySearch(buckets.soon, this.searchQuery);
+		const query = this.getActiveSearchQuery();
+		const overdue = filterTasksBySearch(buckets.overdue, query);
+		const dueToday = filterTasksBySearch(buckets.dueToday, query);
+		const soon = filterTasksBySearch(buckets.soon, query);
 		this.updateSearchMatch(overdue.length + dueToday.length + soon.length, pool.length);
 		const handlers = this.rowHandlers();
 		const labels = this.rowLabels();
@@ -977,7 +998,7 @@ export class TodoSidebarView extends ItemView {
 		if (!overdue.length && !dueToday.length && !soon.length) {
 			el("div", {
 				cls: "todo-empty",
-				text: this.searchQuery.trim() ? this.t("noMatch") : this.t("suggestEmpty"),
+				text: query.trim() ? this.t("noMatch") : this.t("suggestEmpty"),
 				parent: scroll,
 			});
 		}
@@ -986,7 +1007,8 @@ export class TodoSidebarView extends ItemView {
 	private refreshList(): void {
 		if (!this.listHost) return;
 		const all = this.plugin.taskIndex.getAll();
-		const tasks = filterTasksBySearch(all, this.searchQuery);
+		const query = this.getActiveSearchQuery();
+		const tasks = filterTasksBySearch(all, query);
 		this.updateSearchMatch(tasks.length, all.length);
 		const settings = this.plugin.data.settings;
 		renderTaskListView(this.listHost, {
@@ -1000,7 +1022,7 @@ export class TodoSidebarView extends ItemView {
 			draftHandlers: this.draftHandlers(),
 			labels: {
 				title: this.t("listTitle"),
-				empty: this.searchQuery.trim() ? this.t("noMatch") : this.t("listEmpty"),
+				empty: query.trim() ? this.t("noMatch") : this.t("listEmpty"),
 				untagged: this.t("listUntagged"),
 				count: (n) => this.t("listCount", { count: n }),
 				addRootTask: this.t("addRootTask"),
@@ -1013,7 +1035,8 @@ export class TodoSidebarView extends ItemView {
 	private refreshStats(): void {
 		if (!this.statsHost) return;
 		const all = this.plugin.taskIndex.getAll();
-		const tasks = filterTasksBySearch(all, this.searchQuery);
+		const query = this.getActiveSearchQuery();
+		const tasks = filterTasksBySearch(all, query);
 		this.updateSearchMatch(tasks.length, all.length);
 		const stats = computeTaskStats(tasks);
 		for (const item of stats.status) {
@@ -1067,11 +1090,12 @@ export class TodoSidebarView extends ItemView {
 			},
 		});
 
-		const searching = this.searchQuery.trim().length > 0;
+		const query = this.getActiveSearchQuery();
+		const searching = query.trim().length > 0;
 		const openTasks = all.filter((t) => !t.completed);
 		const dayTasks = getTasksForCalendarDay(all, this.selectedDay);
 		const base = searching ? openTasks : dayTasks;
-		const tasks = filterTasksBySearch(base, this.searchQuery);
+		const tasks = filterTasksBySearch(base, query);
 		this.updateSearchMatch(tasks.length, base.length);
 
 		this.dayTitleEl.textContent = searching
